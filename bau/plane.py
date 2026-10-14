@@ -9,6 +9,8 @@ from pathlib import Path
 import httpx
 
 _TAG = re.compile(r"<[^>]+>")
+_BLOCK_END = re.compile(r"</(?:p|li|h[1-6]|div|tr)>|<br\s*/?>", re.IGNORECASE)
+_BLANK_LINES = re.compile(r"\n{3,}")
 _REF = re.compile(r"^\s*([A-Za-z0-9]+)-(\d+)\s*$")
 
 
@@ -35,7 +37,8 @@ class Comment:
 
 
 def html_to_text(value: str | None) -> str:
-    text = _TAG.sub("", (value or "").replace("</p>", "\n").replace("<br>", "\n").replace("<br/>", "\n"))
+    text = _BLOCK_END.sub("\n", value or "")
+    text = _BLANK_LINES.sub("\n\n", _TAG.sub("", text))
     return html.unescape(text).strip()
 
 
@@ -47,6 +50,16 @@ def markdown_to_html(md: str) -> str:
         p = re.sub(r"`(.+?)`", r"<code>\1</code>", p)
         out.append(f"<p>{p.replace(chr(10), '<br>')}</p>")
     return "".join(out)
+
+
+def _retry_delay(r: httpx.Response, attempt: int) -> float:
+    retry_after = r.headers.get("Retry-After")
+    if retry_after is not None:
+        try:
+            return min(30.0, float(retry_after))
+        except ValueError:
+            pass
+    return min(30, 2**attempt)
 
 
 def split_ref(ref: str) -> tuple[str, int]:
@@ -79,10 +92,17 @@ class PlaneClient:
 
     # ── transport ────────────────────────────────────────────────────────
     def _request(self, method: str, path: str, *, params: dict | None = None, json: dict | None = None):
+        """Retry 429 for any method and 5xx for GET only; POSTs and PATCHes are not idempotent."""
         for attempt in range(5):
-            r = self._http.request(method, self._root + path, params=params, json=json)
-            if r.status_code == 429 or r.status_code >= 500:
-                time.sleep(min(30, 2**attempt))
+            try:
+                r = self._http.request(method, self._root + path, params=params, json=json)
+            except httpx.HTTPError as e:
+                raise RuntimeError(f"Plane {method} {path}: {e}") from e
+            retriable = r.status_code == 429 or (method == "GET" and r.status_code >= 500)
+            if retriable:
+                if attempt == 4:
+                    raise RuntimeError(f"Plane {method} {path} -> {r.status_code}: gave up after retries")
+                time.sleep(_retry_delay(r, attempt))
                 continue
             if r.status_code >= 400:
                 raise RuntimeError(f"Plane {method} {path} -> {r.status_code}: {r.text[:300]}")
@@ -105,6 +125,8 @@ class PlaneClient:
     def _project(self, identifier: str) -> dict:
         if identifier not in self._meta:
             projects = {p["identifier"]: p for p in self._get_all("/projects/")}
+            if identifier not in projects:
+                raise ValueError(f"No Plane project {identifier}")
             p = projects[identifier]
             pid = p["id"]
             self._meta[identifier] = {
@@ -172,10 +194,16 @@ class PlaneClient:
 
     def set_state(self, ref: str, state_name: str) -> None:
         meta, _ = self._item(ref)
+        if state_name.lower() not in meta["states"]:
+            valid = sorted(set(meta["state_names"].values()))
+            raise ValueError(f"Unknown state {state_name!r}; valid: {valid}")
         self._patch(ref, {"state": meta["states"][state_name.lower()]})
 
     def add_labels(self, ref: str, names: list[str]) -> None:
         meta, raw = self._item(ref)
+        unknown = [n for n in names if n not in meta["labels"]]
+        if unknown:
+            raise ValueError(f"Unknown label(s) {unknown}")
         current = set(raw.get("labels", [])) | {meta["labels"][n] for n in names}
         self._patch(ref, {"labels": sorted(current)})
 
@@ -186,7 +214,9 @@ class PlaneClient:
 
     def assign(self, ref: str, email: str) -> None:
         meta, _ = self._item(ref)
-        uid = next(k for k, v in meta["members"].items() if v == email)
+        uid = next((k for k, v in meta["members"].items() if v == email), None)
+        if uid is None:
+            raise ValueError(f"No Plane member {email}")
         self._patch(ref, {"assignees": [uid]})
 
     def comment(self, ref: str, markdown: str) -> str:
