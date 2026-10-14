@@ -9,7 +9,7 @@ if [ "$(pwd)" != "$SRC" ]; then
 fi
 uv sync --frozen
 docker build -t bau-agent:latest container/
-docker compose -f container/compose.yml up -d
+docker compose -f container/compose.yml up -d --build
 for label in bau-run bau-snapshot; do
   plist="$HOME/Library/LaunchAgents/com.nakomis.$label.plist"
   cp "launchd/com.nakomis.$label.plist" "$plist"

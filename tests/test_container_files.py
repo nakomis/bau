@@ -18,7 +18,6 @@ ALLOW_LIST = {
     r"^registry\.npmjs\.org$",
     r"^pypi\.org$",
     r"^files\.pythonhosted\.org$",
-    r"^deb\.nodesource\.com$",
 }
 
 
