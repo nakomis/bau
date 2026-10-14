@@ -138,3 +138,15 @@ def test_install_script_syntax():
     assert script.read_text().startswith("#!/usr/bin/env bash")
     r = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_install_script_builds_agent_image_with_load():
+    # With a docker-container buildx builder current, a plain `docker build`
+    # leaves the image in the build cache only; --load puts it in the local store.
+    lines = [
+        line
+        for line in (ROOT / "install.sh").read_text().splitlines()
+        if line.startswith("docker build") and "bau-agent:latest" in line
+    ]
+    assert len(lines) == 1
+    assert "--load" in lines[0]
