@@ -197,6 +197,11 @@ class GitHubClient:
             blocks.append("\n".join(lines))
         return "\n\n".join(blocks)[:6000]
 
+    def issue_comments(self, repo: str, number: int) -> list[str]:
+        """Bodies of the first 100 issue comments on a PR (the worker's own markers live here)."""
+        rows = self._get(f"/repos/{repo}/issues/{number}/comments", per_page=100)
+        return [c.get("body") or "" for c in rows]
+
     def branch_protected(self, repo: str, branch: str = "main") -> bool:
         """True if the branch has classic protection (checks or reviews, no force push) or a
         ruleset with both pull_request and non_fast_forward rules. Empty status-check lists do not count."""

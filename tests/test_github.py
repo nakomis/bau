@@ -126,6 +126,10 @@ GUARDED = {"required_status_checks": {"contexts": ["CI Status"]}, "allow_force_p
 # GET responses keyed by path: (status, body).
 ROUTES = {
     "/repos/nakomis/home-infra/commits/abc123/check-runs": (200, CHECK_RUNS),
+    "/repos/nakomis/home-infra/issues/7/comments": (
+        200,
+        [{"body": "[bau:ci-fix] 1/3"}, {"body": None}, {"body": "hello"}],
+    ),
     "/repos/nakomis/home-infra/branches/main/protection": (200, GUARDED),
     "/repos/nakomis/other/branches/main/protection": (404, {"message": "Branch not protected"}),
     "/repos/nakomis/other/rules/branches/main": (404, {"message": "Not Found"}),
@@ -268,3 +272,7 @@ def test_write_methods_send_expected_requests():
     method, path, body = sent(calls[4])
     assert (method, path) == ("POST", "/graphql")
     assert body["variables"] == {"id": "T1"} and "resolveReviewThread" in body["query"]
+
+
+def test_issue_comments_returns_bodies():
+    assert client().issue_comments("nakomis/home-infra", 7) == ["[bau:ci-fix] 1/3", "", "hello"]
