@@ -22,7 +22,6 @@ Overnight BAU maintenance worker: Plane items in, pull requests out. Spec:
 | `config/` | `bau.yaml`, `projects.yaml` |
 | `launchd/` | Scheduled jobs |
 | `web/` | Dashboard |
-| `terraform/` | GitHub App installation repos |
 | `tests/` | pytest, with fakes under `tests/fakes/` |
 
 ## Testing

@@ -52,7 +52,6 @@ cut-off, and per-session budget and wall-clock limits, so the worker never eats 
 | `config/` | `bau.yaml` (policy and paths) and `projects.yaml` (Plane project to repo map) |
 | `launchd/` | The scheduled jobs |
 | `web/` | The dashboard (Vite + React) |
-| `terraform/` | GitHub App installation repositories |
 | `docs/` | Spec, plans, runbook, architecture diagram |
 
 ## Install on Cere
