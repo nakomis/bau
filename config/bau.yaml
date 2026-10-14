@@ -31,8 +31,8 @@ identities:
   worker_github_login: "nakomis-bau[bot]"
 
 github_app:
-  app_id: 0
-  installation_id: 0
+  app_id: 5319638
+  installation_id: 171462254
   private_key:
     service: bau
     account: github-app-key
