@@ -1,0 +1,9 @@
+# pnpm settings for the web package. Not a real workspace (single package);
+# this file exists only to hold pnpm's supply-chain settings.
+
+# Dependency build scripts stay off unless explicitly allowed here.
+allowBuilds: {}
+
+# Refuse to resolve a version published less than 24h ago. CI installs with
+# --frozen-lockfile, so this only affects local dependency updates.
+minimumReleaseAge: 1440

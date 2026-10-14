@@ -240,3 +240,30 @@ def test_a_second_run_exits_quietly_while_one_holds_the_lock(run_world, capsys):
     assert StubNight.instances == []
     assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
     assert len(StubNight.instances) == 1
+
+
+def test_abandon_parses():
+    p = build_parser()
+    a = p.parse_args(["abandon", "HOME-42", "--note", "x"])
+    assert (a.command, a.ref, a.note) == ("abandon", "HOME-42", "x")
+    assert p.parse_args(["abandon", "HOME-42"]).note == ""
+
+
+def test_serve_parses():
+    assert build_parser().parse_args(["serve"]).port == 8800
+
+
+def test_cli_abandon_invalid_ref_exits_2(capsys):
+    from bau.cli import _abandon
+
+    class P:
+        def comments(self, ref):
+            raise AssertionError("must not be reached")
+
+    args = SimpleNamespace(ref="home-42", note="")
+    cfg = SimpleNamespace(
+        identities=SimpleNamespace(worker_github_login="w", worker_plane_email="e"),
+        paths=SimpleNamespace(logs=Path("/nonexistent/logs")),
+    )
+    assert _abandon(args, cfg, ({}, P(), None, None, None, None)) == 2
+    assert "invalid ref" in capsys.readouterr().out

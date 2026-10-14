@@ -100,4 +100,9 @@ class Repos:
         return dest
 
     def delete_checkout(self, branch: str) -> None:
-        shutil.rmtree(self.checkout_path(branch), ignore_errors=True)
+        if not branch or "/" in branch or "\\" in branch or ".." in branch:
+            raise ValueError(f"refusing to delete checkout for branch {branch!r}")
+        target = self.work_root / branch
+        if target.resolve().parent != self.work_root.resolve():
+            raise ValueError(f"refusing to delete checkout for branch {branch!r}")
+        shutil.rmtree(target, ignore_errors=True)

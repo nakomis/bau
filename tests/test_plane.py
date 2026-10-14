@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 import bau.plane as plane
-from bau.plane import Comment, Item, PlaneClient, html_to_text
+from bau.plane import Comment, Item, PlaneClient, html_to_text, markdown_to_html
 
 PROJECT = {"id": "p1", "identifier": "HOME", "name": "Home"}
 STATES = [{"id": "s-new", "name": "New"}, {"id": "s-prog", "name": "In progress"}]
@@ -177,3 +177,8 @@ def test_unknown_project_state_label_and_member_raise_value_error():
 def test_html_lists_and_headings_become_line_breaks():
     assert html_to_text("<ul><li>a</li><li>b</li></ul><h2>T</h2><p>x</p>") == "a\nb\nT\nx"
     assert html_to_text("<p>one</p><p></p><p></p><p></p><p>two</p>") == "one\n\ntwo"
+
+
+def test_markdown_round_trips_through_plane_html():
+    text = "[bau:picked-up from=Ready] Working on branch `home-42-x` in **nakomis/home-infra**."
+    assert html_to_text(markdown_to_html(text)) == text

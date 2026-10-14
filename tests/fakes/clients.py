@@ -6,7 +6,7 @@ from pathlib import Path
 
 from bau.checkout import Repos
 from bau.github import PR, Thread
-from bau.plane import Comment, Item
+from bau.plane import Comment, Item, html_to_text, markdown_to_html
 from bau.session import SessionResult
 
 
@@ -38,7 +38,7 @@ class FakePlane:
     def comment(self, ref, markdown):
         self.calls.append(("comment", (ref, markdown)))
         self.comments_by_ref.setdefault(ref, []).append(
-            Comment(f"c{len(self.calls)}", "bau@nakomis.com", "", markdown)
+            Comment(f"c{len(self.calls)}", "bau@nakomis.com", "", html_to_text(markdown_to_html(markdown)))
         )
         return "cid"
 

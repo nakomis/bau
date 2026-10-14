@@ -110,7 +110,9 @@ def test_helpers():
     assert repo_for(item(ref="ZZZ-1"), PROJECTS) is None
     assert model_for(item(labels=("BAU", "BAU-fable")), Models("o", "f", "BAU-fable")) == "f"
     assert (
-        previous_state([Comment("c", "bau@nakomis.com", "", "[bau:picked-up from=Ready] branch x")])
+        previous_state(
+            [Comment("c", "bau@nakomis.com", "", "[bau:picked-up from=Ready] branch x")], "bau@nakomis.com"
+        )
         == "Ready"
     )
 
@@ -902,3 +904,19 @@ def test_probe_reports_a_missing_claude_loudly(cfg, tmp_path, monkeypatch):
     assert any("claude" in str(m) and "not found" in str(m) for m in logs)
     n.probe = lambda: Night.probe(n)
     assert n.run().telemetry == "missing"
+
+
+def test_previous_state_ignores_non_worker_comments():
+    comments = [
+        Comment("c1", "bau@nakomis.com", "", "[bau:picked-up from=Ready] x"),
+        Comment("c2", "martin@nakomis.com", "", "[bau:picked-up from=Done] x"),
+    ]
+    assert previous_state(comments, "bau@nakomis.com") == "Ready"
+
+
+def test_already_picked_up_recognises_a_round_tripped_comment(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item()]})
+    plane.comment("HOME-42", "[bau:picked-up from=Ready] Working on branch `home-42-x` in x.")
+    n = night(cfg, plane, FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path))
+    assert n.already_picked_up("HOME-42", "home-42-x", "Ready")
+    assert not n.already_picked_up("HOME-42", "home-42-y", "Ready")
