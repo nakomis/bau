@@ -39,7 +39,9 @@ from bau.sweep import Sweep, first_sunday
 
 DEFAULT_CONFIG = Path("/Users/nakomis/bau/src/config")
 # Stop reasons that make up a normal night; anything else (or an exception) exits non-zero.
-NORMAL_STOP_REASONS = frozenset({"ok", "cutoff", "pace", "ceiling", "paused", "five-hour", "locked"})
+NORMAL_STOP_REASONS = frozenset(
+    {"ok", "cutoff", "pace", "ceiling", "paused", "five-hour", "locked", "sweep-cutoff"}
+)
 # How long each job waits for the shared run lock before giving up (seconds).
 RUN_LOCK_WAIT = 3600
 SWEEP_LOCK_WAIT = 1800
@@ -296,8 +298,10 @@ def _sweep(args: argparse.Namespace, cfg: Config) -> int:
             cfg,
             projects,
             plane,
-            SessionRunner(cfg),
+            # the sweep's own, shorter session wall clock; the night's runner is untouched
+            SessionRunner(cfg, wall_clock_minutes=cfg.limits.sweep_session_wall_clock_minutes),
             clock,
+            paused=paused_reader(args.config / "bau.yaml", cfg.paused),
             oauth_token=read_secret(cfg.claude.oauth_token),
             dry_run=args.dry_run,
         ).run()
@@ -308,7 +312,7 @@ def _sweep(args: argparse.Namespace, cfg: Config) -> int:
         f"{report.candidates} candidate(s) commented, summary {report.summary_ref or 'none'}, "
         f"stop reason {report.stop_reason}"
     )
-    return 0
+    return exit_code(report.stop_reason)
 
 
 def _dispatch(args: argparse.Namespace) -> int:

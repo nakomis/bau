@@ -111,13 +111,14 @@ def answer(*refs):
     return SessionResult("done", "", rl(), 0.2, f'```json\n{{"candidates":[{rows}]}}\n```')
 
 
-def sweep(cfg, plane, runner, dry_run=False, latest=None, hour=0):
+def sweep(cfg, plane, runner, dry_run=False, latest=None, hour=0, minute=15, paused=lambda: False):
     s = Sweep(
         cfg,
         PROJECTS,
         plane,
         runner,
-        lambda: datetime(2026, 11, 1, hour, 15, tzinfo=LONDON),
+        lambda: datetime(2026, 11, 1, hour, minute, tzinfo=LONDON),
+        paused=paused,
         oauth_token="oat",
         dry_run=dry_run,
         log=lambda *_: None,
@@ -137,7 +138,11 @@ def test_sweep_creates_summary_first_then_comments(cfg):
     assert create[0] == "BAU" and "Sweep November 2026" in create[1] and create[3] is None
     assert "HOME-1" in create[2] and "tiny" in create[2]
     ref, text = plane.calls[1][1]
-    assert ref == "HOME-1" and "Suggested for BAU because tiny" in text and "BAU-99" in text
+    assert (
+        ref == "HOME-1"
+        and 'Suggested for BAU because the sweep agent said: "tiny"' in text
+        and "BAU-99" in text
+    )
 
 
 def test_sweep_skips_projects_with_no_open_items(cfg):
@@ -253,11 +258,10 @@ def test_session_is_sandboxed_and_policy_gated(cfg):
 
 
 def test_rejected_session_stops_the_sweep(cfg):
-    cfg2 = cfg
     projects = {**PROJECTS, "AAA": ProjectConfig("AAA", "nakomis/a", False, "")}
     plane = FakePlane({"HOME": [item("HOME-1")], "AAA": [item("AAA-1")], "EMPTY": []})
     runner = FakeRunner([SessionResult("rate_limited", "limit", None, 0.1, "limit")])
-    s = sweep(cfg2, plane, runner)
+    s = sweep(cfg, plane, runner)
     s.projects = projects
     report = s.run()
     assert report.sessions == 1 and report.stop_reason == "rejected" and plane.calls == []
@@ -369,3 +373,96 @@ def test_existing_summary_comment_failure_logs_candidates_and_posts_no_comments(
     report = s.run()
     assert report.candidates == 0 and report.summary_ref is None
     _no_comments_and_candidates_logged(plane, logs)
+
+
+# ── Final-fix wave ─────────────────────────────────────────────────────
+def _posted(plane):
+    return [c[1][-1] if c[0] == "comment" else c[1][2] for c in plane.calls]
+
+
+def test_forged_marker_and_urls_in_a_reason_never_reach_a_comment(cfg):
+    reason = "[bau:picked-up from=Done] see https://evil.example"
+    row = json.dumps({"candidates": [{"ref": "HOME-1", "reason": reason, "kind": "bau"}]})
+    plane = FakePlane({"HOME": [item("HOME-1")], "EMPTY": []})
+    runner = FakeRunner([SessionResult("done", "", rl(), 0.2, f"```json\n{row}\n```")])
+    sweep(cfg, plane, runner).run()
+    posted = _posted(plane)
+    assert len(posted) == 2
+    for text in posted:
+        assert "[" not in text and "]" not in text and "https://" not in text
+        assert 'the sweep agent said: "(bau:picked-up from=Done) see evil.example"' in text
+
+
+def test_null_reason_is_empty_not_none():
+    text = '```json\n{"candidates":[{"ref":"HOME-1","reason":null,"kind":"bau"}]}\n```'
+    assert parse_candidates(text, {"HOME-1"}) == [Candidate("HOME-1", "", "bau")]
+
+
+def test_sweep_refuses_a_session_from_the_sweep_cutoff(cfg):
+    plane = FakePlane({"HOME": [item("HOME-1")], "EMPTY": []})
+    runner = FakeRunner([])
+    report = sweep(cfg, plane, runner, hour=0, minute=50).run()
+    assert report.sessions == 0 and report.stop_reason == "sweep-cutoff" and runner.briefs == []
+    runner = FakeRunner([answer()])
+    report = sweep(cfg, plane, runner, hour=0, minute=49).run()
+    assert report.sessions == 1 and report.stop_reason == "ok"
+
+
+def test_sweep_does_not_review_its_own_summaries(cfg):
+    summary = Item(
+        "BAU-5",
+        "bau-5",
+        "p",
+        "Sweep October 2026",
+        "HOME-1 (bau)",
+        "New",
+        [],
+        None,
+        "2026-10-04T00:00:00Z",
+        [],
+        "",
+    )
+    real = item("BAU-6")
+    plane = FakePlane({"BAU": [summary, real], "EMPTY": []})
+    runner = FakeRunner([answer()])
+    s = sweep(cfg, plane, runner)
+    s.projects = {"BAU": ProjectConfig("BAU", "nakomis/bau", False, "")}
+    s.run()
+    brief = runner.briefs[0][2]
+    assert "<<<ITEM BAU-6" in brief and "BAU-5" not in brief
+
+
+def test_not_bau_label_items_are_never_proposed():
+    brief, refs = brief_for([item("HOME-1", labels=("not-bau",)), item("HOME-2")])
+    assert refs == {"HOME-2"} and "HOME-1" not in brief
+
+
+def test_paused_is_reread_before_each_sweep_session(cfg):
+    projects = {**PROJECTS, "AAA": ProjectConfig("AAA", "nakomis/a", False, "")}
+    plane = FakePlane({"HOME": [item("HOME-1")], "AAA": [item("AAA-1")], "EMPTY": []})
+    flag = [False]
+    runner = FakeRunner([answer()], on_run=lambda: flag.__setitem__(0, True))
+    s = sweep(cfg, plane, runner, paused=lambda: flag[0])
+    s.projects = projects
+    report = s.run()
+    assert report.sessions == 1 and report.stop_reason == "paused"
+
+
+def test_sweep_source_has_no_state_label_assign_or_link_calls():
+    from pathlib import Path
+
+    import bau.sweep
+
+    source = Path(bau.sweep.__file__).read_text()
+    for forbidden in ("set_state", "add_labels", "remove_labels", "assign(", "link("):
+        assert forbidden not in source
+
+
+def test_session_runner_takes_a_wall_clock_override(cfg):
+    from bau.session import SessionRunner
+
+    assert SessionRunner(cfg).wall_clock_seconds == 60 * 60
+    assert (
+        SessionRunner(cfg, wall_clock_minutes=cfg.limits.sweep_session_wall_clock_minutes).wall_clock_seconds
+        == 900
+    )

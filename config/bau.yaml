@@ -5,6 +5,7 @@ paused: false
 schedule:
   no_new_sessions_after: "05:00"
   timezone: Europe/London
+  sweep_no_new_sessions_after: "00:50"  # the monthly sweep must not eat into the night
 
 limits:
   open_pr_ceiling: 50
@@ -16,6 +17,7 @@ limits:
   ci_fix_sessions_per_pr: 3
   too_big_files: 15
   too_big_lines: 400
+  sweep_session_wall_clock_minutes: 15
 
 models:
   default: claude-opus-5-5

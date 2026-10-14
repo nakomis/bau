@@ -7,11 +7,13 @@ from bau.config import Limits, ProjectConfig, load_config, load_projects, paused
 
 MINIMAL = """
 paused: false
-schedule: {no_new_sessions_after: "05:00", timezone: Europe/London}
+schedule: {no_new_sessions_after: "05:00", timezone: Europe/London,
+          sweep_no_new_sessions_after: "00:50"}
 limits: {open_pr_ceiling: 50, pace_margin: 0.10, five_hour_kill: 0.80,
          session_wall_clock_minutes: 60, session_budget_usd: 5.0,
          fail_closed_sessions: 2, ci_fix_sessions_per_pr: 3,
-         too_big_files: 15, too_big_lines: 400}
+         too_big_files: 15, too_big_lines: 400,
+         sweep_session_wall_clock_minutes: 15}
 models: {default: claude-opus-5-5, fable: claude-fable-5-1, fable_label: BAU-fable}
 identities: {github_login: nakomis, owner_plane_email: martin@nakomis.com,
              worker_plane_email: bau@nakomis.com, worker_github_login: "nakomis-bau[bot]"}
@@ -33,7 +35,9 @@ def test_loads_every_section(tmp_path: Path):
     cfg = load_config(p)
     assert cfg.paused is False
     assert cfg.schedule.no_new_sessions_after == time(5, 0)
-    assert cfg.limits == Limits(50, 0.10, 0.80, 60, 5.0, 2, 3, 15, 400)
+    assert cfg.schedule.sweep_no_new_sessions_after == time(0, 50)
+    assert cfg.limits.sweep_session_wall_clock_minutes == 15
+    assert cfg.limits == Limits(50, 0.10, 0.80, 60, 5.0, 2, 3, 15, 400, 15)
     assert cfg.models.fable_label == "BAU-fable"
     assert cfg.github_app.private_key.account == "github-app-key"
     assert cfg.plane.client_cert == Path("~/.config/bau/cere.crt.pem").expanduser()

@@ -183,7 +183,7 @@ def run_world(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "load_config", lambda p: cfg)
     monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW))
     monkeypatch.setattr(cli, "read_secret", lambda ref: "oat")
-    monkeypatch.setattr(cli, "SessionRunner", lambda c: None)
+    monkeypatch.setattr(cli, "SessionRunner", lambda c, **kw: SimpleNamespace(cfg=c, **kw))
     monkeypatch.setattr(cli, "snapshot_rows", lambda *a, **k: ([], []))
     monkeypatch.setattr(cli, "Night", StubNight)
     return SimpleNamespace(cli=cli, cfg=cfg, config_dir=config_dir, snapshot=tmp_path / "state.json")
@@ -314,6 +314,7 @@ def sweep_world(run_world, monkeypatch):
     monkeypatch.setattr(run_world.cli, "SWEEP_LOCK_WAIT", 0)
     monkeypatch.setattr(run_world.cli, "RUN_LOCK_WAIT", 0)
     run_world.cfg.identities = SimpleNamespace()
+    run_world.cfg.limits = SimpleNamespace(session_wall_clock_minutes=60, sweep_session_wall_clock_minutes=15)
     return run_world
 
 
@@ -390,3 +391,27 @@ def test_run_waits_up_to_an_hour_and_sweep_up_to_half(run_world, monkeypatch):
     run_world.cli.main(["run", "--config", str(run_world.config_dir)])
     run_world.cli.main(["sweep", "--force", "--config", str(run_world.config_dir)])
     assert seen == [3600, 1800]
+
+
+def test_sweep_runner_uses_the_sweep_wall_clock(sweep_world):
+    assert _sweep(sweep_world, "--force") == 0
+    runner = StubSweep.instances[0].args[3]
+    assert runner.wall_clock_minutes == sweep_world.cfg.limits.sweep_session_wall_clock_minutes == 15
+
+
+def test_sweep_exit_code_follows_the_stop_reason(sweep_world):
+    from bau.sweep import SweepReport
+
+    real = StubSweep.__init__
+
+    def init(self, *a, **k):
+        real(self, *a, **k)
+        self.report = SweepReport(stop_reason=StubSweep.reason)
+
+    StubSweep.__init__ = init
+    try:
+        for reason, code in (("sweep-cutoff", 0), ("cutoff", 0), ("telemetry-missing", 1)):
+            StubSweep.reason = reason
+            assert _sweep(sweep_world, "--force") == code
+    finally:
+        StubSweep.__init__ = real

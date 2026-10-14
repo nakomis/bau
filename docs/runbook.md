@@ -80,6 +80,10 @@ Once a month (00:15 on the first Sunday) `bau sweep` reads the open items of eve
 
 The sweep only proposes. It never adds the `BAU` label, never changes an item's state and never writes `state.json`; Martin labels the candidates he agrees with.
 
+Label an item `not-bau` to stop the sweep suggesting it. The sweep also skips its own "Sweep <Month YYYY>" summaries, and it quotes the agent's reasons as `the sweep agent said: "..."` with brackets and link schemes stripped.
+
+The sweep has its own limits in `config/bau.yaml`: `limits.sweep_session_wall_clock_minutes` (15) caps each session, and `schedule.sweep_no_new_sessions_after` (00:50, Europe/London) stops it starting sessions so a slow sweep cannot take the night's place. A sweep stopped that way ends with stop reason `sweep-cutoff` and exits 0; because the cut-off is a time of day, a `--force` sweep run later in the day will start no sessions.
+
 Try it any day without writing anything:
 
 ```bash
