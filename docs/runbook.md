@@ -2,6 +2,12 @@
 
 Operating notes for the nightly BAU worker on Cere. Everything runs as the `nakomis` user.
 
+## Prerequisites
+
+- Homebrew, with `uv` installed (`brew install uv`).
+- Colima running. Export `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` in the shell that runs `install.sh`.
+- The `claude` CLI at `~/.local/bin/claude`, logged in as the `nakomis` user.
+
 ## Layout on Cere
 
 | Path | Contents |
@@ -53,7 +59,9 @@ cd ~/bau/src
 .venv/bin/bau run --dry-run    # lists what a real run would do, starts no sessions
 ```
 
-A dry run prints one `new-ticket BAU-n -> <repo> (<model>)` line for each labelled BAU item, or `nothing to do`. It does not write `~/bau/state.json`. Other CLI commands: `bau run` (the real nightly run) and `bau snapshot` (refresh `state.json` without starting sessions). All accept `--config <dir>`, which defaults to `/Users/nakomis/bau/src/config`.
+`bau probe` prints `None` when no rate-limit event arrives from Claude Code (telemetry missing); the nightly run then records `telemetry: missing`.
+
+A dry run prints a `preflight:` line, then one line per planned action (`feedback`, `ready`, `merged`, or `new-ticket BAU-n -> <repo> (<model>)`), or a decline. If nothing is planned it prints `nothing to do`. It does not write `~/bau/state.json`. Other CLI commands: `bau run` (the real nightly run) and `bau snapshot` (refresh `state.json` without starting sessions). All accept `--config <dir>`, which defaults to `/Users/nakomis/bau/src/config`.
 
 ## Schedule
 
@@ -66,7 +74,18 @@ No new sessions start after the `no_new_sessions_after` cut-off in `config/bau.y
 
 Set `paused: true` in `config/bau.yaml` to stop new sessions. Policy refuses to start work while it is set. Set it back to `false` to resume.
 
-Check the config on disk: the run reads `bau.yaml` once, when `bau run` starts. A change therefore takes effect at the next run, not in a run already in progress. Stopping a run that is already in progress needs `launchctl bootout` (see Uninstall).
+The run reads `bau.yaml` once, when `bau run` starts. A change therefore takes effect at the next run, not in a run already in progress. For an immediate stop, see "Stop a run now".
+
+## Stop a run now
+
+```bash
+launchctl bootout gui/$(id -u)/com.nakomis.bau-run
+docker ps --format '{{.Names}}' | grep '^bau-' | grep -v '^bau-egress$' | xargs -r docker kill
+```
+
+`bootout` stops the `bau` process but not a running agent container, so the second line kills any containers named `bau-<ref>`. The egress proxy (`bau-egress`) is left running.
+
+The job stays unloaded until `./install.sh` or `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nakomis.bau-run.plist` is run.
 
 ## Logs
 
@@ -78,6 +97,8 @@ docker logs bau-egress                  # egress proxy: denied requests
 ```
 
 ## Upgrade
+
+Do not upgrade while a run is active, roughly 01:00 to 05:30: `install.sh` reloads both jobs and would interrupt it. Use "Stop a run now" first if one is in progress.
 
 ```bash
 cd ~/bau/src

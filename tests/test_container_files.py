@@ -95,6 +95,8 @@ def test_every_plist_path_has_claude_and_homebrew():
         path = plistlib.loads(f.read_bytes())["EnvironmentVariables"]["PATH"].split(":")
         assert path[0] == "/Users/nakomis/.local/bin", f.name
         assert "/opt/homebrew/bin" in path, f.name
+        env = plistlib.loads(f.read_bytes())["EnvironmentVariables"]
+        assert env["PYTHONUNBUFFERED"] == "1", f.name
 
 
 def _plist(name):

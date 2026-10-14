@@ -38,7 +38,7 @@ Three launchd jobs on Cere, all as the `nakomis` user:
 
 - `com.nakomis.bau-run` at 01:00 every night: the worker itself.
 - `com.nakomis.bau-snapshot` hourly during the day: refreshes `state.json` for the dashboard.
-- `com.nakomis.bau-sweep` on the first Sunday of the month: proposes BAU candidates.
+- `com.nakomis.bau-sweep` on the first Sunday of the month: proposes BAU candidates (coming with the sweep, BAU-5).
 
 Usage is bounded by a pace rule read from Claude Code's own rate-limit telemetry, a 05:00
 cut-off, and per-session budget and wall-clock limits, so the worker never eats the week.
