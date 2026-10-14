@@ -1,0 +1,8 @@
+^(api\.)?github\.com$
+^objects\.githubusercontent\.com$
+^codeload\.github\.com$
+^api\.anthropic\.com$
+^registry\.npmjs\.org$
+^pypi\.org$
+^files\.pythonhosted\.org$
+^deb\.nodesource\.com$

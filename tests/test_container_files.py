@@ -1,0 +1,88 @@
+import plistlib
+import re
+import subprocess
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+DOCKERFILE = (ROOT / "container" / "Dockerfile").read_text()
+
+ALLOW_LIST = {
+    r"^(api\.)?github\.com$",
+    r"^objects\.githubusercontent\.com$",
+    r"^codeload\.github\.com$",
+    r"^api\.anthropic\.com$",
+    r"^registry\.npmjs\.org$",
+    r"^pypi\.org$",
+    r"^files\.pythonhosted\.org$",
+    r"^deb\.nodesource\.com$",
+}
+
+
+def test_claude_code_version_pinned():
+    assert re.search(r"@anthropic-ai/claude-code@\d+\.\d+\.\d+(\s|$)", DOCKERFILE)
+
+
+def test_npm_install_scripts_disabled():
+    assert "npm config set ignore-scripts true" in DOCKERFILE
+
+
+def test_runs_as_non_root_uid_501():
+    assert re.search(r"useradd\b[^\n]*-u 501\b", DOCKERFILE)
+    users = re.findall(r"^USER\s+(\S+)", DOCKERFILE, re.MULTILINE)
+    assert users and users[-1] not in ("root", "0")
+
+
+def test_filter_is_exactly_the_spec_allow_list():
+    lines = [
+        ln.strip()
+        for ln in (ROOT / "container" / "filter").read_text().splitlines()
+        if ln.strip() and not ln.lstrip().startswith("#")
+    ]
+    assert set(lines) == ALLOW_LIST
+    assert len(lines) == len(ALLOW_LIST)
+    assert not any("nakomis" in ln for ln in lines)
+
+
+def test_tinyproxy_denies_by_default():
+    conf = (ROOT / "container" / "tinyproxy.conf").read_text()
+    assert re.search(r"^FilterDefaultDeny\s+Yes", conf, re.MULTILINE)
+
+
+def test_bau_net_is_internal_and_only_proxy_bridges():
+    compose = yaml.safe_load((ROOT / "container" / "compose.yml").read_text())
+    assert compose["networks"]["bau-net"]["internal"] is True
+    assert "internal" not in (compose["networks"].get("egress") or {})
+    for name, svc in compose["services"].items():
+        nets = svc["networks"]
+        if "egress" in nets:
+            assert name == "bau-egress"
+            assert "bau-net" in nets
+
+
+def _plist(name):
+    with open(ROOT / "launchd" / f"com.nakomis.{name}.plist", "rb") as f:
+        return plistlib.load(f)
+
+
+def test_run_plist():
+    p = _plist("bau-run")
+    assert p["Label"] == "com.nakomis.bau-run"
+    assert p["ProgramArguments"][-1] == "run"
+    assert p["StartCalendarInterval"] == {"Hour": 1, "Minute": 0}
+
+
+def test_snapshot_plist():
+    p = _plist("bau-snapshot")
+    assert p["Label"] == "com.nakomis.bau-snapshot"
+    assert p["ProgramArguments"][-1] == "snapshot"
+    assert p["StartCalendarInterval"] == [{"Hour": h, "Minute": 30} for h in range(7, 24)]
+    assert len(p["StartCalendarInterval"]) == 17
+
+
+def test_install_script_syntax():
+    script = ROOT / "install.sh"
+    assert script.read_text().startswith("#!/usr/bin/env bash")
+    r = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr

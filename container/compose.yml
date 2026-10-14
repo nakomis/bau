@@ -1,0 +1,15 @@
+name: bau
+networks:
+  # internal: no route out. Agent containers join this network only and reach the world via bau-egress.
+  bau-net:
+    internal: true
+  egress: {}
+services:
+  bau-egress:
+    image: vimagick/tinyproxy:latest
+    container_name: bau-egress
+    restart: unless-stopped
+    networks: [bau-net, egress]
+    volumes:
+      - ./tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
+      - ./filter:/etc/tinyproxy/filter:ro

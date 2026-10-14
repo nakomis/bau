@@ -88,3 +88,10 @@ def test_failed_write_leaves_no_temp_file(tmp_path: Path):
     with pytest.raises(TypeError):
         write_snapshot(tmp_path / "state.json", {"x": object()})
     assert list(tmp_path.iterdir()) == []
+
+
+def test_pace_override_used_only_when_no_latest():
+    kept = {"five_hour_used": 0.1}
+    kw = dict(paused=False, last_run=None, open_prs=[], deploy_pending=[], declined=[], now=0.0)
+    assert build_snapshot(latest=None, pace_override=kept, **kw)["pace"] == kept
+    assert build_snapshot(latest=None, **kw)["pace"] is None
