@@ -40,6 +40,24 @@ describe('PrTable', () => {
     expect(screen.queryByText(/unresolved/)).not.toBeInTheDocument();
   });
 
+  it('renders unsafe URLs as plain text, not links', () => {
+    for (const bad of ['javascript:alert(1)', 'data:text/html,x', 'http://x', 'garbage']) {
+      const { unmount } = render(
+        <PrTable rows={[{ ...row, url: bad, plane_url: bad }]} onAbandon={vi.fn()} />,
+      );
+      expect(screen.queryByRole('link')).not.toBeInTheDocument();
+      expect(screen.getByText(/HOME-42: Rotate logs/)).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('opens external links safely', () => {
+    render(<PrTable rows={[row]} onAbandon={vi.fn()} />);
+    for (const a of screen.getAllByRole('link')) {
+      expect(a).toHaveAttribute('rel', 'noopener noreferrer');
+    }
+  });
+
   it('says so when empty', () => {
     render(<PrTable rows={[]} onAbandon={vi.fn()} />);
     expect(screen.getByText(/nothing awaiting review/i)).toBeInTheDocument();
@@ -61,6 +79,28 @@ describe('PrTable', () => {
       expect(screen.getByRole('button', { name: 'Abandon' })).toBeInTheDocument();
       expect(screen.queryByLabelText(/note/i)).not.toBeInTheDocument();
       expect(onAbandon).not.toHaveBeenCalled();
+    });
+
+    it('arms one row at a time and disarms everything after five seconds', () => {
+      const rows = [row, { ...row, ref: 'HOME-43', title: 'Other' }];
+      render(<PrTable rows={rows} onAbandon={vi.fn()} />);
+      const [a, b] = screen.getAllByRole('button', { name: 'Abandon' });
+      fireEvent.click(a);
+      fireEvent.click(b);
+      expect(screen.getAllByRole('button', { name: 'Confirm abandon' })).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: 'Abandon' })).toHaveLength(1);
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Abandon' }));
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(screen.getAllByRole('button', { name: 'Confirm abandon' })).toHaveLength(1);
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(screen.queryByRole('button', { name: 'Confirm abandon' })).not.toBeInTheDocument();
     });
 
     it('sends the note on confirm and shows the restored state', async () => {

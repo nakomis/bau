@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import type { Snapshot } from './types';
@@ -157,5 +157,29 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Confirm abandon' }));
     });
     expect(screen.getByText('a run is in progress')).toBeInTheDocument();
+  });
+
+  it('keeps only the latest five notices', async () => {
+    const prs = Array.from({ length: 7 }, (_, i) => ({
+      ...snap.open_prs?.[0],
+      ref: `HOME-${i + 1}`,
+      title: `T${i + 1}`,
+    }));
+    const f = vi.fn((url: string) =>
+      url === '/state.json'
+        ? Promise.resolve(respond({ ...snap, open_prs: prs }))
+        : Promise.resolve(respond({ restored_state: 'Todo' })),
+    );
+    vi.stubGlobal('fetch', f);
+    await mount();
+    for (let i = 1; i <= 7; i++) {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Abandon' })[0]);
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm abandon' }));
+      });
+    }
+    expect(within(screen.getByRole('status')).getAllByRole('listitem')).toHaveLength(5);
+    expect(screen.queryByText('HOME-1: restored to Todo')).not.toBeInTheDocument();
+    expect(screen.getByText('HOME-7: restored to Todo')).toBeInTheDocument();
   });
 });

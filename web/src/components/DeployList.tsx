@@ -1,4 +1,5 @@
 import type { DeployRow } from '../types';
+import ExtLink from './ExtLink';
 
 export default function DeployList({ rows }: { rows: DeployRow[] }) {
   if (rows.length === 0) return <p className="text-neutral-500">Nothing to deploy.</p>;
@@ -12,9 +13,9 @@ export default function DeployList({ rows }: { rows: DeployRow[] }) {
           <ul className="list-disc pl-5 text-sm">
             {items.map((r) => (
               <li key={r.ref}>
-                <a className="underline" href={r.pr_url}>
+                <ExtLink className="underline" href={r.pr_url}>
                   {r.ref}: {r.title}
-                </a>
+                </ExtLink>
               </li>
             ))}
           </ul>

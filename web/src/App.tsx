@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import DeployList from './components/DeployList';
 import LastRun from './components/LastRun';
 import PrTable from './components/PrTable';
 import { abandon, fetchState, isStale, relativeTime } from './lib/format';
 import type { Snapshot } from './types';
 
+const MAX_NOTICES = 5;
 const REFRESH_MS = 5 * 60 * 1000;
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -19,7 +20,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 export default function App() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [notices, setNotices] = useState<string[]>([]);
+  const [notices, setNotices] = useState<{ id: number; text: string }[]>([]);
+  const noticeId = useRef(0);
 
   const refresh = useCallback(async () => {
     try {
@@ -39,7 +41,11 @@ export default function App() {
   const onAbandon = useCallback(
     async (ref: string, note: string) => {
       const restored = await abandon(ref, note);
-      setNotices((n) => [...n, `${ref}: restored to ${restored}`]);
+      noticeId.current += 1;
+      const id = noticeId.current;
+      setNotices((n) =>
+        [...n, { id, text: `${ref}: restored to ${restored}` }].slice(-MAX_NOTICES),
+      );
       void refresh();
       return restored;
     },
@@ -81,7 +87,7 @@ export default function App() {
       {notices.length > 0 && (
         <ul className="mt-4 text-sm text-green-700 dark:text-green-400" role="status">
           {notices.map((n) => (
-            <li key={n}>{n}</li>
+            <li key={n.id}>{n.text}</li>
           ))}
         </ul>
       )}

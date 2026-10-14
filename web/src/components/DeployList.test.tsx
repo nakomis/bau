@@ -24,6 +24,17 @@ describe('DeployList', () => {
     expect(screen.getByText(/A-2: Title A-2/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /B-1/ })).toHaveAttribute('href', 'https://gh/B-1');
   });
+  it('renders unsafe URLs as text and opens good ones safely', () => {
+    const { unmount } = render(
+      <DeployList rows={[{ ...mk('nakomis/a', 'A-1'), pr_url: 'javascript:alert(1)' }]} />,
+    );
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.getByText(/A-1: Title A-1/)).toBeInTheDocument();
+    unmount();
+    render(<DeployList rows={[mk('nakomis/a', 'A-1')]} />);
+    expect(screen.getByRole('link')).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
   it('says so when empty', () => {
     render(<DeployList rows={[]} />);
     expect(screen.getByText('Nothing to deploy.')).toBeInTheDocument();

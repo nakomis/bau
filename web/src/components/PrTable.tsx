@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ageLabel } from '../lib/format';
 import type { OpenPr } from '../types';
+import ExtLink from './ExtLink';
 
 const ciColour: Record<OpenPr['ci'], string> = {
   green: 'bg-green-600',
@@ -16,27 +17,34 @@ type Props = {
   onAbandon: (ref: string, note: string) => Promise<string>;
 };
 
-function AbandonControl({ pr, onAbandon }: { pr: string; onAbandon: Props['onAbandon'] }) {
-  const [confirming, setConfirming] = useState(false);
+function AbandonControl({
+  pr,
+  armed,
+  onArm,
+  onDisarm,
+  onAbandon,
+}: {
+  pr: string;
+  armed: boolean;
+  onArm: (ref: string) => void;
+  onDisarm: () => void;
+  onAbandon: Props['onAbandon'];
+}) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [outcome, setOutcome] = useState<{ ok: boolean; text: string } | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const arm = () => {
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => setConfirming(false), CONFIRM_MS);
-  };
-  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => {
+    if (!armed) setNote('');
+  }, [armed]);
 
   const click = async () => {
-    if (!confirming) {
+    if (!armed) {
       setOutcome(null);
-      setConfirming(true);
-      arm();
+      onArm(pr);
       return;
     }
-    clearTimeout(timer.current);
+    onDisarm();
     setBusy(true);
     try {
       const restored = await onAbandon(pr, note);
@@ -45,8 +53,6 @@ function AbandonControl({ pr, onAbandon }: { pr: string; onAbandon: Props['onAba
       setOutcome({ ok: false, text: e instanceof Error ? e.message : 'abandon failed' });
     } finally {
       setBusy(false);
-      setConfirming(false);
-      setNote('');
     }
   };
 
@@ -55,7 +61,7 @@ function AbandonControl({ pr, onAbandon }: { pr: string; onAbandon: Props['onAba
   return (
     <div className="flex flex-col gap-1 sm:items-end">
       {outcome && <span className="text-red-700 dark:text-red-400">{outcome.text}</span>}
-      {confirming && (
+      {armed && (
         <label className="flex flex-col text-xs text-neutral-500">
           Note (optional)
           <input
@@ -65,7 +71,7 @@ function AbandonControl({ pr, onAbandon }: { pr: string; onAbandon: Props['onAba
             value={note}
             onChange={(e) => {
               setNote(e.target.value);
-              arm();
+              onArm(pr);
             }}
           />
         </label>
@@ -76,13 +82,27 @@ function AbandonControl({ pr, onAbandon }: { pr: string; onAbandon: Props['onAba
         className="self-start text-red-700 underline disabled:opacity-50 sm:self-end dark:text-red-400"
         onClick={click}
       >
-        {confirming ? 'Confirm abandon' : 'Abandon'}
+        {armed ? 'Confirm abandon' : 'Abandon'}
       </button>
     </div>
   );
 }
 
 export default function PrTable({ rows, onAbandon }: Props) {
+  const [armedRef, setArmedRef] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const disarm = () => {
+    clearTimeout(timer.current);
+    setArmedRef(null);
+  };
+  const arm = (ref: string) => {
+    clearTimeout(timer.current);
+    setArmedRef(ref);
+    timer.current = setTimeout(() => setArmedRef(null), CONFIRM_MS);
+  };
+  useEffect(() => () => clearTimeout(timer.current), []);
+
   if (rows.length === 0) return <p className="text-neutral-500">Nothing awaiting review.</p>;
   const label =
     'before:mr-2 before:text-neutral-500 before:content-[attr(data-label)] sm:before:hidden';
@@ -105,12 +125,12 @@ export default function PrTable({ rows, onAbandon }: Props) {
             className="mb-3 block rounded border border-neutral-200 p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-0 sm:border-t sm:p-0 dark:border-neutral-800"
           >
             <td className="block py-1 sm:table-cell sm:py-2">
-              <a className="underline" href={r.url}>
+              <ExtLink className="underline" href={r.url}>
                 {r.ref}: {r.title}
-              </a>{' '}
-              <a className="text-neutral-500 underline" href={r.plane_url}>
+              </ExtLink>{' '}
+              <ExtLink className="text-neutral-500 underline" href={r.plane_url}>
                 Plane
-              </a>
+              </ExtLink>
               {r.draft && <span className="ml-2 text-xs text-neutral-500">draft</span>}
             </td>
             <td className={`block sm:table-cell ${label}`} data-label="Repo:">
@@ -129,7 +149,13 @@ export default function PrTable({ rows, onAbandon }: Props) {
               {r.unresolved_comments > 0 ? `${r.unresolved_comments} unresolved` : '—'}
             </td>
             <td className="block pt-2 sm:table-cell sm:pt-0 sm:text-right">
-              <AbandonControl pr={r.ref} onAbandon={onAbandon} />
+              <AbandonControl
+                pr={r.ref}
+                armed={armedRef === r.ref}
+                onArm={arm}
+                onDisarm={disarm}
+                onAbandon={onAbandon}
+              />
             </td>
           </tr>
         ))}
