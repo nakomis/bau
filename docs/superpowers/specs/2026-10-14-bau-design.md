@@ -43,7 +43,7 @@ All on Cere as the `nakomis` user (see the host-user amendment in section 2), wi
 
 | Component | Runs where | Role |
 |---|---|---|
-| launchd agents | host | `bau-run` nightly 01:00; `bau-snapshot` hourly 07:00–23:00; `bau-sweep` monthly, first Sunday 03:00 |
+| launchd agents | host | `bau-run` nightly 01:00; `bau-snapshot` hourly 07:00–23:00; `bau-sweep` monthly, first Sunday 00:15 (amended 14 Oct 2026) |
 | `bau-run` (Python) | host | Reads Plane and GitHub, applies policy, starts one container per session, parses the agent stream, writes the snapshot |
 | Agent container | Docker on Cere (OrbStack or Docker Desktop) | Linux image: Claude Code, git, gh, Node + pnpm, Python + uv, Swift for Linux, ruff, biome, vitest, pytest. Runs `claude -p` with permissions bypassed and `--max-budget-usd` |
 | `state.json` | host | Snapshot read by the dashboard, BD-1 and the API |
@@ -139,6 +139,8 @@ declined: [{ref, reason, at}]
 ## 10. The candidate sweep
 
 Monthly, first Sunday 03:00, same preflight and pace guards. One session per active project, Opus 5.5.
+
+**Amended 14 Oct 2026 (implementation reviews):** the sweep runs at 00:15 on the first Sunday, before the night, and shares the run lock with it: the sweep waits up to 30 minutes for the lock, the night up to 60 (then records `stop_reason: locked`). Sweep sessions have their own 15-minute wall clock and no sweep session starts at or after 00:50, so the 01:00 night is never skipped. "Every active project" means every project in `projects.yaml`. Suppression is keyed on comments, not `updated_at`: an item the worker has suggested is not re-proposed until someone other than the worker comments on it. A `not-bau` label permanently excludes an item. A rerun in the same month reuses the open `Sweep <Month YYYY>` item, and summary items are never themselves reviewed. The agent's reasons are posted as quoted agent speech with brackets neutralised and URL schemes stripped, so they can never forge a `[bau:` marker.
 
 - Looks for: small, self-contained, well-specified items in eligible repos with no recent activity from Martin; items with no activity since the Taiga migration; duplicates; items a merged PR has already done. The spring-clean triage criteria form the prompt.
 - Does: comments "Suggested for BAU because …" on each candidate; creates one work item in `BAU` titled `Sweep <Month YYYY>` listing candidates by project with a one-line reason each. Martin labels the ones he agrees with.
