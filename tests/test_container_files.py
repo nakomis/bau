@@ -69,10 +69,16 @@ def test_compose_network_name_matches_config():
     assert compose["networks"]["bau-net"]["name"] == expected
 
 
-def test_compose_images_not_latest():
+def test_egress_image_built_from_pinned_alpine_and_no_latest():
     compose = yaml.safe_load((ROOT / "container" / "compose.yml").read_text())
     for svc in compose["services"].values():
+        assert svc["build"]["dockerfile"] == "egress.Dockerfile"
         assert ":latest" not in svc["image"]
+    egress = (ROOT / "container" / "egress.Dockerfile").read_text()
+    assert re.search(r"^FROM alpine:\d+\.\d+", egress, re.MULTILINE)
+    assert "apk add --no-cache tinyproxy" in egress
+    for f in ("Dockerfile", "egress.Dockerfile", "compose.yml"):
+        assert ":latest" not in (ROOT / "container" / f).read_text()
 
 
 def test_tinyproxy_logs_to_stderr():
