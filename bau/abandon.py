@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,10 +13,21 @@ from bau.lock import run_lock
 from bau.plane import Comment, PlaneClient, split_ref
 from bau.runloop import Night, previous_state
 
+log = logging.getLogger(__name__)
+REF_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*-[1-9][0-9]*$")
+FINISHED_STATES = ("done", "cancelled", "archived")
 RUN_IN_PROGRESS = "a BAU run is in progress; try again after it finishes"
 
 
 class AlreadyAbandoned(RuntimeError):
+    pass
+
+
+class InvalidRef(ValueError):
+    pass
+
+
+class UnknownProject(ValueError):
     pass
 
 
@@ -41,47 +54,72 @@ def abandon(
     repos: Repos,
     projects: dict[str, ProjectConfig],
     worker_login: str,
+    worker_email: str,
     note: str = "",
     lock_path: Path | None = None,
 ) -> AbandonResult:
+    ref = ref.strip()
+    if not REF_PATTERN.match(ref):
+        raise InvalidRef("invalid ref")
+    if split_ref(ref)[0] not in projects:
+        raise UnknownProject("unknown project")
+    args = (ref, plane, github_factory, repos, projects, worker_login, worker_email, clean_note(note))
     if lock_path is None:
-        return _abandon(ref, plane, github_factory, repos, projects, worker_login, note)
+        return _abandon(*args)
     with run_lock(lock_path) as held:
         if not held:
             raise RunInProgress(RUN_IN_PROGRESS)
-        return _abandon(ref, plane, github_factory, repos, projects, worker_login, note)
+        return _abandon(*args)
 
 
-def _abandon(ref, plane, github_factory, repos, projects, worker_login, note) -> AbandonResult:
-    comments = plane.comments(ref)  # chronological; raises for an unknown ref
+def clean_note(note: str) -> str:
+    """One line, no bracket characters: a note must never be able to forge a [bau:...] marker."""
+    return " ".join(note.split()).replace("[", "(").replace("]", ")")[:500]
+
+
+def _own_branch(ref: str, branch: str | None) -> str | None:
+    if branch and branch.startswith(ref.lower() + "-"):
+        return branch
+    if branch:
+        log.warning("not deleting a checkout for %s: branch does not belong to it", ref)
+    return None
+
+
+def _abandon(ref, plane, github_factory, repos, projects, worker_login, worker_email, note) -> AbandonResult:
+    item = plane.get_item(ref)
+    if item.state.lower() in FINISHED_STATES or "BAU" not in item.labels:
+        raise AlreadyAbandoned(f"nothing to abandon: {ref} is {item.state}")
+    # Only the worker's own comments carry markers; anyone else's are just text.
+    comments = [c for c in plane.comments(ref) if c.author_email == worker_email]
     picked_at = _last_index(comments, "[bau:picked-up")
     if picked_at < 0:
         raise AlreadyAbandoned(f"{ref} has no active BAU pick-up to abandon")
     if _last_index(comments, "[bau:abandoned]") > picked_at:
         raise AlreadyAbandoned(f"{ref} has already been abandoned")
-    restored = previous_state(comments) or "New"
+    restored = previous_state(comments, worker_email) or "New"
     suffix = f" Note: {note}" if note else ""
 
     ident, _ = split_ref(ref)
-    project = projects.get(ident)
+    project = projects[ident]
     pr_number = None
     branch = None
-    if project:
-        gh = github_factory(project.repo)
-        for pr in gh.open_prs(project.repo, worker_login):
-            if Night.ref_of(pr) == ref and pr.head_ref.startswith(ref.lower() + "-"):
-                gh.comment(
-                    project.repo, pr.number, "[bau] Abandoned by Martin from the BAU dashboard." + suffix
-                )
-                gh.close_pr(project.repo, pr.number)
-                pr_number, branch = pr.number, pr.head_ref
-                break
+    gh = github_factory(project.repo)
+    for pr in gh.open_prs(project.repo, worker_login):
+        if Night.ref_of(pr) == ref and pr.head_ref.startswith(ref.lower() + "-"):
+            gh.comment(project.repo, pr.number, "[bau] Abandoned by Martin from the BAU dashboard." + suffix)
+            gh.close_pr(project.repo, pr.number)
+            pr_number, branch = pr.number, pr.head_ref
+            break
     if branch is None:
         parts = comments[picked_at].text.split("`")
         if len(parts) >= 3:
             branch = parts[1]
+    branch = _own_branch(ref, branch)
     if branch:
-        repos.delete_checkout(branch)
+        try:
+            repos.delete_checkout(branch)
+        except ValueError:
+            log.warning("refused to delete a checkout for %s", ref)
     plane.set_state(ref, restored)
     plane.remove_labels(ref, ["BAU"])
     plane.comment(ref, f"[bau:abandoned] by Martin. Returned to {restored}; BAU label removed." + suffix)

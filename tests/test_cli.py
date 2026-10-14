@@ -251,3 +251,21 @@ def test_abandon_parses():
 
 def test_serve_parses():
     assert build_parser().parse_args(["serve"]).port == 8800
+
+
+def test_cli_abandon_invalid_ref_exits_2(capsys):
+    from bau.abandon import InvalidRef
+    from bau.cli import _abandon
+
+    class P:
+        def comments(self, ref):
+            raise AssertionError("must not be reached")
+
+    args = SimpleNamespace(ref="home-42", note="")
+    cfg = SimpleNamespace(
+        identities=SimpleNamespace(worker_github_login="w", worker_plane_email="e"),
+        paths=SimpleNamespace(logs=Path("/nonexistent/logs")),
+    )
+    assert _abandon(args, cfg, ({}, P(), None, None, None, None)) == 2
+    assert "invalid ref" in capsys.readouterr().out
+    assert InvalidRef

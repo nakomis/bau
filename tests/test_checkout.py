@@ -129,3 +129,21 @@ def test_checkout_branch_failure_leaves_no_partial_directory(upstream: Path, tmp
     with pytest.raises(RuntimeError):
         repos.checkout_branch("nakomis/demo", "demo-404-missing")
     assert not repos.checkout_path("demo-404-missing").exists()
+
+
+@pytest.mark.parametrize("branch", ["../x", "/tmp/x", "a/b", "", "..", "a\\b", "x..y"])
+def test_delete_checkout_refuses_escaping_names(tmp_path: Path, branch: str):
+    repos = Repos(tmp_path / "repos", tmp_path / "work")
+    sentinel = tmp_path / "x"
+    sentinel.mkdir()
+    (sentinel / "keep").write_text("1")
+    with pytest.raises(ValueError):
+        repos.delete_checkout(branch)
+    assert (sentinel / "keep").exists() and (tmp_path / "work").exists()
+
+
+def test_delete_checkout_removes_a_plain_branch(tmp_path: Path):
+    repos = Repos(tmp_path / "repos", tmp_path / "work")
+    (tmp_path / "work" / "home-1-x").mkdir()
+    repos.delete_checkout("home-1-x")
+    assert not (tmp_path / "work" / "home-1-x").exists()

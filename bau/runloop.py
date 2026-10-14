@@ -58,8 +58,10 @@ def model_for(item: Item, models: Models) -> str:
     return models.fable if models.fable_label in item.labels else models.default
 
 
-def previous_state(comments: list[Comment]) -> str | None:
+def previous_state(comments: list[Comment], worker_email: str) -> str | None:
     for c in reversed(comments):
+        if c.author_email != worker_email:
+            continue
         m = PICKED.search(c.text)
         if m:
             return m.group(1).strip()
@@ -332,7 +334,9 @@ class Night:
         files, lines = pr.changed_files, pr.additions + pr.deletions
         if diff_too_big(files, lines, self.cfg.limits):
             item = self.plane.get_item(ref)
-            back = previous_state(self.plane.comments(ref)) or item.state
+            back = (
+                previous_state(self.plane.comments(ref), self.cfg.identities.worker_plane_email) or item.state
+            )
             self.close_too_big(item, repo, gh, pr, pr.head_ref, back, f"{files} files / {lines} lines")
             return
         self.mark_ready(gh, repo, pr, ci)
@@ -581,7 +585,9 @@ class Night:
         branch = branch_name(item.ref, item.name)
         back = item.state
         if back.casefold() == "in progress":  # picked up on an earlier night: restore the original state
-            back = previous_state(self.plane.comments(item.ref)) or back
+            back = (
+                previous_state(self.plane.comments(item.ref), self.cfg.identities.worker_plane_email) or back
+            )
         self.plane.set_state(item.ref, "In progress")
         self.plane.assign(item.ref, self.cfg.identities.worker_plane_email)
         if not self.already_picked_up(item.ref, branch, back):

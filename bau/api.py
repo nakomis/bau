@@ -1,24 +1,38 @@
 from __future__ import annotations
 
 import hmac
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from fastapi import FastAPI, Header
+from fastapi import Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from bau.abandon import RUN_IN_PROGRESS, AlreadyAbandoned, RunInProgress, abandon
+from bau.abandon import (
+    RUN_IN_PROGRESS,
+    AlreadyAbandoned,
+    InvalidRef,
+    RunInProgress,
+    UnknownProject,
+    abandon,
+)
 from bau.checkout import Repos
 from bau.config import Config, ProjectConfig
 from bau.github import GitHubClient
 from bau.plane import PlaneClient
 from bau.snapshot import read_snapshot
 
+log = logging.getLogger(__name__)
+
+
+class Forbidden(Exception):
+    pass
+
 
 class AbandonBody(BaseModel):
-    note: str = ""
+    note: str = Field(default="", max_length=500)
 
 
 def create_app(
@@ -40,15 +54,17 @@ def create_app(
             headers={"Cache-Control": "no-store"},
         )
 
-    @app.post("/abandon/{ref}")
-    def abandon_route(
-        ref: str,
-        body: AbandonBody | None = None,
-        x_bau_proxy_token: str | None = Header(default=None),
-    ):
+    @app.exception_handler(Forbidden)
+    def forbidden(request: Request, exc: Forbidden):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+
+    def require_token(x_bau_proxy_token: str | None = Header(default=None)) -> None:
         supplied = (x_bau_proxy_token or "").encode()
         if not proxy_token or not hmac.compare_digest(supplied, proxy_token.encode()):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
+            raise Forbidden
+
+    @app.post("/abandon/{ref}", dependencies=[Depends(require_token)])
+    def abandon_route(ref: str, body: AbandonBody | None = None):
         try:
             r = abandon(
                 ref,
@@ -57,13 +73,21 @@ def create_app(
                 repos=repos,
                 projects=projects,
                 worker_login=cfg.identities.worker_github_login,
+                worker_email=cfg.identities.worker_plane_email,
                 note=body.note if body else "",
                 lock_path=cfg.paths.logs.parent / "run.lock",
             )
+        except InvalidRef:
+            return JSONResponse({"error": "invalid ref"}, status_code=400)
+        except UnknownProject:
+            return JSONResponse({"error": "unknown project"}, status_code=400)
         except RunInProgress:
             return JSONResponse({"error": RUN_IN_PROGRESS}, status_code=409)
         except AlreadyAbandoned as e:
             return JSONResponse({"error": str(e)}, status_code=409)
+        except Exception as e:  # noqa: BLE001 - never echo text that could contain tokens
+            log.error("abandon %s failed: %s", ref, type(e).__name__)
+            return JSONResponse({"error": "internal error"}, status_code=500)
         return {"ref": r.ref, "pr": r.pr, "restored_state": r.restored_state}
 
     if static_dir is not None and static_dir.is_dir():

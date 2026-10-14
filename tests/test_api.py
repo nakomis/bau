@@ -85,3 +85,35 @@ def test_abandon_during_run_is_409(cfg, tmp_path):
         r = client(cfg, tmp_path, plane).post("/abandon/HOME-42", headers=AUTH)
     assert r.status_code == 409
     assert r.json() == {"error": "a BAU run is in progress; try again after it finishes"}
+
+
+def test_bad_token_beats_invalid_body(cfg, tmp_path):
+    r = client(cfg, tmp_path).post("/abandon/HOME-42", json={"note": "x" * 600})
+    assert r.status_code == 403
+
+
+def test_overlong_note_is_rejected(cfg, tmp_path):
+    r = client(cfg, tmp_path).post("/abandon/HOME-42", json={"note": "x" * 501}, headers=AUTH)
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize("ref", ["home-42", "HOME-042", "ho_me-1", "HOME-0"])
+def test_invalid_ref_is_400(cfg, tmp_path, ref):
+    r = client(cfg, tmp_path).post(f"/abandon/{ref}", headers=AUTH)
+    assert r.status_code == 400 and r.json() == {"error": "invalid ref"}
+
+
+def test_unknown_project_is_400(cfg, tmp_path):
+    r = client(cfg, tmp_path).post("/abandon/ZZZ-1", headers=AUTH)
+    assert r.status_code == 400 and r.json() == {"error": "unknown project"}
+
+
+def test_unexpected_error_is_500_json_without_detail(cfg, tmp_path):
+    class Boom(FakePlane):
+        def comments(self, ref):
+            raise RuntimeError("secret-token-abc")
+
+    c = client(cfg, tmp_path, Boom({"HOME": [item()]}))
+    r = c.post("/abandon/HOME-42", headers=AUTH)
+    assert r.status_code == 500 and r.json() == {"error": "internal error"}
+    assert "secret" not in r.text

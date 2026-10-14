@@ -10,7 +10,14 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from bau.abandon import RUN_IN_PROGRESS, AlreadyAbandoned, RunInProgress, abandon
+from bau.abandon import (
+    RUN_IN_PROGRESS,
+    AlreadyAbandoned,
+    InvalidRef,
+    RunInProgress,
+    UnknownProject,
+    abandon,
+)
 from bau.checkout import Repos
 from bau.config import Config, KeychainRef, load_config, load_projects, paused_reader
 from bau.github import GitHubApp, GitHubClient
@@ -304,9 +311,13 @@ def _abandon(args: argparse.Namespace, cfg: Config, wired) -> int:
             repos=repos,
             projects=projects,
             worker_login=cfg.identities.worker_github_login,
+            worker_email=cfg.identities.worker_plane_email,
             note=args.note,
             lock_path=cfg.paths.logs.parent / "run.lock",
         )
+    except (InvalidRef, UnknownProject) as e:
+        print(e)
+        return 2
     except RunInProgress:
         print(RUN_IN_PROGRESS)
         return 1
