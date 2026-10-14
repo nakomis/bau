@@ -16,6 +16,7 @@ PUB = KEY.public_key()
 
 def test_jwt_is_signed_rs256_with_short_expiry():
     token = make_jwt(12345, PEM, now=1_000_000)
+    # verify_exp is off because the fixed 1970 timestamp is long expired; the claims are what matter.
     claims = jwt.decode(token, PUB, algorithms=["RS256"], options={"verify_exp": False})
     assert claims == {"iat": 1_000_000 - 60, "exp": 1_000_000 + 540, "iss": "12345"}
 
@@ -53,82 +54,139 @@ PR_JSON = {
     "additions": 40,
     "deletions": 5,
 }
+# The /pulls list endpoint omits these four fields; open_prs must hydrate them via /pulls/{n}.
+LIST_PR_JSON = {
+    k: v
+    for k, v in PR_JSON.items()
+    if k not in ("mergeable_state", "changed_files", "additions", "deletions")
+}
+CLOSED_ROWS = [
+    {**LIST_PR_JSON, "number": 11, "merged_at": "2026-10-15T12:00:00Z"},  # included
+    {**LIST_PR_JSON, "number": 12, "merged_at": "2026-10-10T12:00:00Z"},  # merged before since
+    {**LIST_PR_JSON, "number": 13, "user": {"login": "nakomis"}, "merged_at": "2026-10-15T12:00:00Z"},
+    {**LIST_PR_JSON, "number": 14, "merged_at": None},  # closed, not merged
+]
+THREADS_BODY = {
+    "data": {
+        "repository": {
+            "pullRequest": {
+                "reviewThreads": {
+                    "nodes": [
+                        {
+                            "id": "T1",
+                            "isResolved": False,
+                            "comments": {
+                                "nodes": [
+                                    {
+                                        "author": {"login": "nakomis"},
+                                        "body": "rename this",
+                                        "createdAt": "2026-10-16T09:00:00Z",
+                                        "databaseId": 555,
+                                    }
+                                ]
+                            },
+                        },
+                        {"id": "T2", "isResolved": True, "comments": {"nodes": []}},
+                    ]
+                }
+            }
+        }
+    }
+}
+CHECK_RUNS = {
+    "check_runs": [
+        {
+            "name": "lint",
+            "status": "completed",
+            "conclusion": "success",
+            "output": {"title": "Lint ok", "summary": "All good"},
+        },
+        {
+            "name": "tests",
+            "status": "completed",
+            "conclusion": "failure",
+            "output": {"title": "3 tests failed", "summary": "test_x broke"},
+        },
+        {
+            "name": "deploy",
+            "status": "completed",
+            "conclusion": "skipped",
+            "output": {"title": None, "summary": None},
+        },
+        {
+            "name": "slow",
+            "status": "completed",
+            "conclusion": "timed_out",
+            "output": {"title": None, "summary": None},
+        },
+    ]
+}
+GUARDED = {"required_status_checks": {"contexts": ["CI Status"]}, "allow_force_pushes": {"enabled": False}}
+
+# GET responses keyed by path: (status, body).
+ROUTES = {
+    "/repos/nakomis/home-infra/commits/abc123/check-runs": (200, CHECK_RUNS),
+    "/repos/nakomis/home-infra/branches/main/protection": (200, GUARDED),
+    "/repos/nakomis/other/branches/main/protection": (404, {"message": "Branch not protected"}),
+    "/repos/nakomis/other/rules/branches/main": (404, {"message": "Not Found"}),
+    "/repos/nakomis/forced/branches/main/protection": (
+        200,
+        {"required_status_checks": {"contexts": ["CI"]}, "allow_force_pushes": {"enabled": True}},
+    ),
+    "/repos/nakomis/forced/rules/branches/main": (404, {"message": "Not Found"}),
+    "/repos/nakomis/unguarded/branches/main/protection": (200, {"allow_force_pushes": {"enabled": False}}),
+    "/repos/nakomis/unguarded/rules/branches/main": (404, {"message": "Not Found"}),
+    "/repos/nakomis/empty-checks/branches/main/protection": (
+        200,
+        {"required_status_checks": {"contexts": [], "checks": []}, "allow_force_pushes": {"enabled": False}},
+    ),
+    "/repos/nakomis/empty-checks/rules/branches/main": (404, {"message": "Not Found"}),
+    "/repos/nakomis/rules-both/branches/main/protection": (404, {"message": "Branch not protected"}),
+    "/repos/nakomis/rules-both/rules/branches/main": (
+        200,
+        [{"type": "pull_request"}, {"type": "non_fast_forward"}, {"type": "deletion"}],
+    ),
+    "/repos/nakomis/rules-checks/branches/main/protection": (404, {"message": "Branch not protected"}),
+    "/repos/nakomis/rules-checks/rules/branches/main": (
+        200,
+        [{"type": "required_status_checks", "parameters": {}}],
+    ),
+}
 
 
 def rest(request: httpx.Request):
     path, method = request.url.path, request.method
     if path == "/repos/nakomis/home-infra/pulls" and method == "GET":
-        return httpx.Response(200, json=[PR_JSON, {**PR_JSON, "number": 8, "user": {"login": "nakomis"}}])
+        if request.url.params.get("state") == "closed":
+            return httpx.Response(200, json=CLOSED_ROWS)
+        return httpx.Response(
+            200, json=[LIST_PR_JSON, {**LIST_PR_JSON, "number": 8, "user": {"login": "nakomis"}}]
+        )
     if path == "/repos/nakomis/home-infra/pulls/7":
         return httpx.Response(200, json=PR_JSON)
-    if path == "/repos/nakomis/home-infra/commits/abc123/check-runs":
-        return httpx.Response(
-            200,
-            json={
-                "check_runs": [
-                    {
-                        "name": "lint",
-                        "status": "completed",
-                        "conclusion": "success",
-                        "output": {"title": "Lint ok", "summary": "All good"},
-                    },
-                    {
-                        "name": "tests",
-                        "status": "completed",
-                        "conclusion": "failure",
-                        "output": {"title": "3 tests failed", "summary": "test_x broke"},
-                    },
-                ]
-            },
-        )
-    if path == "/repos/nakomis/home-infra/branches/main/protection":
-        return httpx.Response(
-            200,
-            json={
-                "required_status_checks": {"contexts": ["CI Status"]},
-                "allow_force_pushes": {"enabled": False},
-            },
-        )
-    if path == "/repos/nakomis/other/branches/main/protection":
-        return httpx.Response(404, json={"message": "Branch not protected"})
     if path == "/graphql":
-        return httpx.Response(
-            200,
-            json={
-                "data": {
-                    "repository": {
-                        "pullRequest": {
-                            "reviewThreads": {
-                                "nodes": [
-                                    {
-                                        "id": "T1",
-                                        "isResolved": False,
-                                        "comments": {
-                                            "nodes": [
-                                                {
-                                                    "author": {"login": "nakomis"},
-                                                    "body": "rename this",
-                                                    "createdAt": "2026-10-16T09:00:00Z",
-                                                }
-                                            ]
-                                        },
-                                    },
-                                    {"id": "T2", "isResolved": True, "comments": {"nodes": []}},
-                                ]
-                            }
-                        }
-                    }
-                }
-            },
-        )
+        return httpx.Response(200, json=THREADS_BODY)
+    if path in ROUTES:
+        status, body = ROUTES[path]
+        return httpx.Response(status, json=body)
     return httpx.Response(200, json={})
 
 
-def client() -> GitHubClient:
-    return GitHubClient("ghs_abc", transport=httpx.MockTransport(rest))
+def client(calls: list | None = None) -> GitHubClient:
+    def handler(request: httpx.Request):
+        if calls is not None:
+            calls.append(request)
+        return rest(request)
+
+    return GitHubClient("ghs_abc", transport=httpx.MockTransport(handler))
 
 
-def test_open_prs_filters_by_author():
+def sent(request: httpx.Request):
+    body = json.loads(request.content) if request.content else None
+    return request.method, request.url.path, body
+
+
+def test_open_prs_filters_by_author_and_hydrates_list_fields():
     prs = client().open_prs("nakomis/home-infra", "nakomis-bau[bot]")
     assert [p.number for p in prs] == [7]
     assert prs[0].head_sha == "abc123" and prs[0].draft is True and prs[0].changed_files == 3
@@ -138,20 +196,75 @@ def test_ci_status_red_if_any_failure():
     assert client().ci_status("nakomis/home-infra", "abc123") == "red"
 
 
+def test_check_runs_request_asks_for_a_full_page():
+    calls = []
+    client(calls).ci_status("nakomis/home-infra", "abc123")
+    assert calls[0].url.params["per_page"] == "100"
+
+
 def test_check_summaries_lists_only_failing_runs():
     text = client().check_summaries("nakomis/home-infra", "abc123")
-    assert "3 tests failed" in text and "test_x broke" in text
+    assert text == "tests: 3 tests failed\ntest_x broke\n\nslow: "
     assert "Lint ok" not in text and "All good" not in text
+    assert "deploy" not in text and "None" not in text
 
 
-def test_branch_protected_requires_checks_and_no_force_push():
-    assert client().branch_protected("nakomis/home-infra") is True
-    assert client().branch_protected("nakomis/other") is False
+def test_branch_protection_classic_guard():
+    c = client()
+    assert c.branch_protected("nakomis/home-infra") is True
+    assert c.branch_protected("nakomis/forced") is False  # force pushes allowed
+    assert c.branch_protected("nakomis/unguarded") is False  # neither checks nor reviews
+    assert c.branch_protected("nakomis/empty-checks") is False  # empty contexts and checks
+    assert c.branch_protected("nakomis/other") is False  # no classic protection, no rules
+
+
+def test_branch_protection_rulesets():
+    c = client()
+    assert c.branch_protected("nakomis/rules-both") is True  # pull_request and non_fast_forward
+    assert c.branch_protected("nakomis/rules-checks") is False  # only required_status_checks
 
 
 def test_review_threads_graphql_shape():
-    threads = client().review_threads("nakomis/home-infra", 7)
+    seen = {}
+
+    def handler(request: httpx.Request):
+        if request.url.path == "/graphql":
+            seen["body"] = json.loads(request.content)
+        return rest(request)
+
+    c = GitHubClient("ghs_abc", transport=httpx.MockTransport(handler))
+    threads = c.review_threads("nakomis/home-infra", 7)
     assert threads == [
-        Thread("T1", False, [ThreadComment("nakomis", "rename this", "2026-10-16T09:00:00Z")]),
+        Thread("T1", False, [ThreadComment("nakomis", "rename this", "2026-10-16T09:00:00Z", 555)]),
         Thread("T2", True, []),
     ]
+    assert seen["body"]["variables"] == {"owner": "nakomis", "name": "home-infra", "number": 7}
+    assert "reviewThreads" in seen["body"]["query"]
+
+
+def test_merged_prs_since_filters_by_author_and_merge_time():
+    prs = client().merged_prs_since("nakomis/home-infra", "nakomis-bau[bot]", "2026-10-14T00:00:00Z")
+    assert [p.number for p in prs] == [11]
+
+
+def test_write_methods_send_expected_requests():
+    calls = []
+    c = client(calls)
+    c.comment("nakomis/home-infra", 7, "hello")
+    c.close_pr("nakomis/home-infra", 7)
+    c.mark_ready("PR_x")
+    c.reply_in_thread("nakomis/home-infra", 7, 555, "done")
+    c.resolve_thread("T1")
+    assert sent(calls[0]) == ("POST", "/repos/nakomis/home-infra/issues/7/comments", {"body": "hello"})
+    assert sent(calls[1]) == ("PATCH", "/repos/nakomis/home-infra/pulls/7", {"state": "closed"})
+    method, path, body = sent(calls[2])
+    assert (method, path) == ("POST", "/graphql")
+    assert body["variables"] == {"id": "PR_x"} and "markPullRequestReadyForReview" in body["query"]
+    assert sent(calls[3]) == (
+        "POST",
+        "/repos/nakomis/home-infra/pulls/7/comments/555/replies",
+        {"body": "done"},
+    )
+    method, path, body = sent(calls[4])
+    assert (method, path) == ("POST", "/graphql")
+    assert body["variables"] == {"id": "T1"} and "resolveReviewThread" in body["query"]

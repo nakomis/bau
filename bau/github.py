@@ -7,6 +7,7 @@ import httpx
 import jwt
 
 API = "https://api.github.com"
+FAILING_CONCLUSIONS = ("failure", "timed_out", "cancelled", "action_required")
 
 
 def make_jwt(app_id: int, private_key_pem: str, now: int | None = None) -> str:
@@ -71,6 +72,7 @@ class ThreadComment:
     author: str
     body: str
     created_at: str
+    comment_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -134,13 +136,17 @@ class GitHubClient:
         return body["data"]
 
     def open_prs(self, repo: str, author: str) -> list[PR]:
-        rows = self._get(f"/repos/{repo}/pulls", state="open", per_page=100)
-        return [self._pr(repo, d) for d in rows if d["user"]["login"] == author]
+        """Open PRs by author. The list endpoint omits mergeable_state and the size counters,
+        so each match is hydrated with pr(). Sees at most the 100 most recently updated open PRs."""
+        rows = self._get(f"/repos/{repo}/pulls", state="open", sort="updated", direction="desc", per_page=100)
+        return [self.pr(repo, d["number"]) for d in rows if d["user"]["login"] == author]
 
     def pr(self, repo: str, number: int) -> PR:
         return self._pr(repo, self._get(f"/repos/{repo}/pulls/{number}"))
 
     def merged_prs_since(self, repo: str, author: str, since_iso: str) -> list[PR]:
+        """Merged PRs by author after since_iso. Not hydrated: callers need only number, refs,
+        body and merged_at. Sees at most the 100 most recently updated closed PRs."""
         rows = self._get(
             f"/repos/{repo}/pulls", state="closed", sort="updated", direction="desc", per_page=100
         )
@@ -156,44 +162,61 @@ class GitHubClient:
         out = []
         for t in data["repository"]["pullRequest"]["reviewThreads"]["nodes"]:
             comments = [
-                ThreadComment((c.get("author") or {}).get("login", ""), c["body"], c["createdAt"])
+                ThreadComment(
+                    (c.get("author") or {}).get("login", ""),
+                    c["body"],
+                    c["createdAt"],
+                    c.get("databaseId"),
+                )
                 for c in t["comments"]["nodes"]
             ]
             out.append(Thread(t["id"], bool(t["isResolved"]), comments))
         return out
 
     def ci_status(self, repo: str, sha: str) -> str:
-        runs = self._get(f"/repos/{repo}/commits/{sha}/check-runs")["check_runs"]
+        runs = self._get(f"/repos/{repo}/commits/{sha}/check-runs", per_page=100)["check_runs"]
         if not runs:
             return "none"
         if any(r["status"] != "completed" for r in runs):
             return "pending"
-        if any(r["conclusion"] in ("failure", "timed_out", "cancelled", "action_required") for r in runs):
+        if any(r["conclusion"] in FAILING_CONCLUSIONS for r in runs):
             return "red"
         return "green"
 
     def check_summaries(self, repo: str, sha: str) -> str:
-        runs = self._get(f"/repos/{repo}/commits/{sha}/check-runs")["check_runs"]
+        runs = self._get(f"/repos/{repo}/commits/{sha}/check-runs", per_page=100)["check_runs"]
         blocks = []
         for r in runs:
-            if r.get("conclusion") in ("success", None):
+            if r.get("conclusion") not in FAILING_CONCLUSIONS:
                 continue
             output = r.get("output") or {}
-            lines = [f"{r['name']}: {output.get('title', '')}"]
-            if output.get("summary"):
-                lines.append(output["summary"])
+            lines = [f"{r['name']}: {output.get('title') or ''}"]
+            summary = output.get("summary") or ""
+            if summary:
+                lines.append(summary)
             blocks.append("\n".join(lines))
         return "\n\n".join(blocks)[:6000]
 
     def branch_protected(self, repo: str, branch: str = "main") -> bool:
+        """True if the branch has classic protection (checks or reviews, no force push) or a
+        ruleset with both pull_request and non_fast_forward rules. Empty status-check lists do not count."""
         r = self._http.get(f"/repos/{repo}/branches/{branch}/protection")
+        if r.status_code != 404:
+            r.raise_for_status()
+            p = r.json()
+            checks = p.get("required_status_checks") or {}
+            guarded = bool(
+                checks.get("contexts") or checks.get("checks") or p.get("required_pull_request_reviews")
+            )
+            no_force = not (p.get("allow_force_pushes") or {}).get("enabled", False)
+            if guarded and no_force:
+                return True
+        r = self._http.get(f"/repos/{repo}/rules/branches/{branch}")
         if r.status_code == 404:
             return False
         r.raise_for_status()
-        p = r.json()
-        guarded = bool(p.get("required_status_checks") or p.get("required_pull_request_reviews"))
-        no_force = not (p.get("allow_force_pushes") or {}).get("enabled", False)
-        return guarded and no_force
+        types = {rule.get("type") for rule in r.json()}
+        return {"pull_request", "non_fast_forward"} <= types
 
     def mark_ready(self, node_id: str) -> None:
         self._graphql(
