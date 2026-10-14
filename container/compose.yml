@@ -1,0 +1,17 @@
+name: bau
+networks:
+  # internal: no route out. Agent containers join this network only and reach the world via bau-egress.
+  bau-net:
+    internal: true
+    name: bau-net  # must match container.network in config/bau.yaml (not prefixed with the project name)
+  egress: {}
+services:
+  bau-egress:
+    build: {context: ., dockerfile: egress.Dockerfile}
+    image: bau-egress:local
+    container_name: bau-egress
+    restart: unless-stopped
+    networks: [bau-net, egress]
+    volumes:
+      - ./tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
+      - ./filter:/etc/tinyproxy/filter:ro

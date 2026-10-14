@@ -1,0 +1,5 @@
+# Plane project identifier -> GitHub repo. A ticket may override with a
+# `repo: nakomis/<name>` line in its description.
+projects:
+  BAU:   {repo: nakomis/bau,          deploys: false, deploy_action: ""}
+  HOME:  {repo: nakomis/home-infra,   deploys: true,  deploy_action: "Run the relevant playbook: scripts/{leia,luke,mace,cere,mac}-ansible.sh"}
