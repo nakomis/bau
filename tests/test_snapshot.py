@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from bau.snapshot import DeployRow, LastRun, OpenPrRow, build_snapshot, read_snapshot, write_snapshot
 from bau.telemetry import RateLimit, Window
 
@@ -80,3 +82,9 @@ def test_write_is_atomic_and_readable(tmp_path: Path):
     assert read_snapshot(p) == {"schema": 1, "x": 1}
     assert read_snapshot(tmp_path / "missing.json") is None
     assert not list(tmp_path.glob("*.tmp*"))
+
+
+def test_failed_write_leaves_no_temp_file(tmp_path: Path):
+    with pytest.raises(TypeError):
+        write_snapshot(tmp_path / "state.json", {"x": object()})
+    assert list(tmp_path.iterdir()) == []
