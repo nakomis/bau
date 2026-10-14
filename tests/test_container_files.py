@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+from bau.config import load_config
+
 ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = (ROOT / "container" / "Dockerfile").read_text()
 
@@ -59,6 +61,34 @@ def test_bau_net_is_internal_and_only_proxy_bridges():
         if "egress" in nets:
             assert name == "bau-egress"
             assert "bau-net" in nets
+
+
+def test_compose_network_name_matches_config():
+    compose = yaml.safe_load((ROOT / "container" / "compose.yml").read_text())
+    expected = load_config(ROOT / "config" / "bau.yaml").container.network
+    assert compose["networks"]["bau-net"]["name"] == expected
+
+
+def test_compose_images_not_latest():
+    compose = yaml.safe_load((ROOT / "container" / "compose.yml").read_text())
+    for svc in compose["services"].values():
+        assert ":latest" not in svc["image"]
+
+
+def test_tinyproxy_logs_to_stderr():
+    conf = (ROOT / "container" / "tinyproxy.conf").read_text()
+    assert re.search(r'^LogFile\s+"/dev/stderr"', conf, re.MULTILINE)
+
+
+def test_dockerfile_has_no_uv_toml_noop():
+    assert "uv.toml" not in DOCKERFILE
+
+
+def test_every_plist_path_has_claude_and_homebrew():
+    for f in sorted((ROOT / "launchd").glob("*.plist")):
+        path = plistlib.loads(f.read_bytes())["EnvironmentVariables"]["PATH"].split(":")
+        assert path[0] == "/Users/nakomis/.local/bin", f.name
+        assert "/opt/homebrew/bin" in path, f.name
 
 
 def _plist(name):

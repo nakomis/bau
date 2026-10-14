@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN corepack enable && corepack prepare pnpm@11.5.1 --activate \
     && npm install -g @anthropic-ai/claude-code@2.1.299 @biomejs/biome \
     && pip3 install --break-system-packages uv ruff pytest
-# Install scripts stay off: pnpm 11 blocks them by default; make npm and pip match.
-RUN npm config set ignore-scripts true -g && printf '[install]\nno-build-isolation = false\n' > /etc/uv.toml
+# Install scripts stay off for npm (pnpm 11 blocks them by default).
+RUN npm config set ignore-scripts true -g
 # UID 501 matches the nakomis user on Cere so the bind-mounted checkout is writable.
 RUN useradd -m -u 501 -s /bin/bash agent
 USER agent

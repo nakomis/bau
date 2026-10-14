@@ -9,7 +9,7 @@
   <key>StandardOutPath</key><string>/Users/nakomis/bau/logs/bau-run.log</string>
   <key>StandardErrorPath</key><string>/Users/nakomis/bau/logs/bau-run.log</string>
   <key>EnvironmentVariables</key><dict>
-    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PATH</key><string>/Users/nakomis/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>DOCKER_HOST</key><string>unix:///Users/nakomis/.colima/default/docker.sock</string>
   </dict>
 </dict></plist>

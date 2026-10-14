@@ -93,6 +93,7 @@ def test_docker_command_shape(cfg, tmp_path):
     assert "-w /Users/nakomis/bau/work/x" in joined
     assert "--max-budget-usd 5.0" in joined and "--model claude-opus-5-5" in joined
     assert "--output-format stream-json" in joined and "--dangerously-skip-permissions" in joined
+    assert "-e NODE_USE_ENV_PROXY=1" in joined
     no_repo = docker_command(cfg, name="bau-x", checkout=Path("/w"), bare=None, model="m", budget=1.0)
     assert ":ro" not in " ".join(no_repo)
     custom = docker_command(

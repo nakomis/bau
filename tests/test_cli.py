@@ -96,6 +96,36 @@ def test_snapshot_rows_survives_one_repo_failing():
     assert any("a/bad" in str(m) for m in logs)
 
 
+def test_snapshot_ignores_unknown_last_run_keys(tmp_path, monkeypatch):
+    import json
+
+    from bau import cli
+    from bau.snapshot import read_snapshot
+
+    snap = tmp_path / "state.json"
+    snap.write_text(
+        json.dumps(
+            {
+                "last_run": {
+                    "started": "s",
+                    "ended": "e",
+                    "sessions": 1,
+                    "prs_opened": 0,
+                    "feedback_handled": 0,
+                    "stop_reason": "ok",
+                    "telemetry": "ok",
+                    "future_field": 7,
+                }
+            }
+        )
+    )
+    cfg = SimpleNamespace(paused=False, paths=SimpleNamespace(snapshot=snap))
+    monkeypatch.setattr(cli, "load_config", lambda p: cfg)
+    monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW))
+    assert cli.main(["snapshot"]) == 0
+    assert read_snapshot(snap)["last_run"]["started"] == "s"
+
+
 def test_client_factory_caches_and_refreshes_near_expiry():
     now = [NOW]
     minted = []

@@ -54,6 +54,8 @@ def docker_command(
         f"HTTPS_PROXY={cfg.container.proxy}",
         "-e",
         f"HTTP_PROXY={cfg.container.proxy}",
+        "-e",
+        "NODE_USE_ENV_PROXY=1",
     ]
     if env_file:
         cmd += ["--env-file", env_file]

@@ -4,6 +4,7 @@ import argparse
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -136,6 +137,13 @@ def snapshot_rows(cfg: Config, projects, plane, factory, clock, log: Callable[..
     return open_rows, deploy_rows
 
 
+def _last_run(raw: dict | None) -> LastRun | None:
+    if not raw:
+        return None
+    known = {f.name for f in fields(LastRun)}
+    return LastRun(**{k: v for k, v in raw.items() if k in known})
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -197,7 +205,7 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "snapshot":
         previous = read_snapshot(cfg.paths.snapshot) or {}
         open_rows, deploy_rows = snapshot_rows(cfg, projects, plane, factory, clock)
-        last = LastRun(**previous["last_run"]) if previous.get("last_run") else None
+        last = _last_run(previous.get("last_run"))
         write_snapshot(
             cfg.paths.snapshot,
             build_snapshot(
