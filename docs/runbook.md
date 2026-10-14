@@ -29,6 +29,9 @@ Secrets are read from the macOS login keychain, service `bau` (`bau/secrets.py`)
   `security add-generic-password -s bau -a github-app-key -w "$(cat key.pem)"`
 - `claude-oauth-token`: the token from `claude setup-token`.
   `security add-generic-password -s bau -a claude-oauth-token -w`
+- `proxy-token`: the shared secret Leia sends as `X-Bau-Proxy-Token` for `POST /abandon/{ref}`.
+  `security add-generic-password -s bau -a proxy-token -w "$(openssl rand -hex 32)"`
+  The same value goes in SSM `/bau/proxy-token` for Leia.
 
 Check an item exists with `security find-generic-password -s bau -a <account>`. `install.sh` warns if any is missing.
 

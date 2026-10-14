@@ -247,3 +247,7 @@ def test_abandon_parses():
     a = p.parse_args(["abandon", "HOME-42", "--note", "x"])
     assert (a.command, a.ref, a.note) == ("abandon", "HOME-42", "x")
     assert p.parse_args(["abandon", "HOME-42"]).note == ""
+
+
+def test_serve_parses():
+    assert build_parser().parse_args(["serve"]).port == 8800

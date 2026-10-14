@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from bau.abandon import RUN_IN_PROGRESS, AlreadyAbandoned, RunInProgress, abandon
 from bau.checkout import Repos
-from bau.config import Config, load_config, load_projects, paused_reader
+from bau.config import Config, KeychainRef, load_config, load_projects, paused_reader
 from bau.github import GitHubApp, GitHubClient
 from bau.lock import run_lock
 from bau.plane import PlaneClient
@@ -48,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dry-run", action="store_true")
     sub.add_parser("snapshot", help="refresh state.json without starting sessions", parents=[common])
     sub.add_parser("probe", help="print the current usage windows", parents=[common])
+    sv = sub.add_parser("serve", help="the dashboard API and static site", parents=[common])
+    sv.add_argument("--port", type=int, default=8800)
     ab = sub.add_parser("abandon", help="abandon a picked-up item", parents=[common])
     ab.add_argument("ref")
     ab.add_argument("--note", default="")
@@ -279,6 +281,13 @@ def _dispatch(args: argparse.Namespace) -> int:
                 pace_override=previous.get("pace"),
             ),
         )
+        return 0
+    if args.command == "serve":
+        from bau.api import create_app, serve
+
+        static_dir = Path(args.config).parent / "web" / "dist"
+        token = read_secret(KeychainRef("bau", "proxy-token"))
+        serve(create_app(cfg, projects, plane, factory, repos, static_dir, token), args.port)
         return 0
     if args.command == "abandon":
         return _abandon(args, cfg, wired)
