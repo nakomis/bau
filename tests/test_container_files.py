@@ -118,6 +118,21 @@ def test_snapshot_plist():
     assert len(p["StartCalendarInterval"]) == 17
 
 
+def test_sweep_plist():
+    p = _plist("bau-sweep")
+    assert p["Label"] == "com.nakomis.bau-sweep"
+    assert p["ProgramArguments"][-1] == "sweep"
+    assert p["StartCalendarInterval"] == {"Weekday": 0, "Hour": 0, "Minute": 15}
+    assert p["StandardOutPath"] == "/Users/nakomis/bau/logs/bau-sweep.log"
+    assert p["EnvironmentVariables"]["DOCKER_HOST"] == "unix:///Users/nakomis/.colima/default/docker.sock"
+
+
+def test_install_script_installs_every_plist():
+    script = (ROOT / "install.sh").read_text()
+    for f in (ROOT / "launchd").glob("*.plist"):
+        assert f.stem.removeprefix("com.nakomis.") in script, f.name
+
+
 def test_install_script_syntax():
     script = ROOT / "install.sh"
     assert script.read_text().startswith("#!/usr/bin/env bash")

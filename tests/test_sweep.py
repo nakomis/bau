@@ -324,3 +324,48 @@ def test_reason_is_one_line_without_markdown_links_or_headings():
     text = f'```json\n{{"candidates":[{{"ref":"HOME-1","reason":{json.dumps(reason)},"kind":"bau"}}]}}\n```'
     (c,) = parse_candidates(text, {"HOME-1"})
     assert c.reason == "Tiny click now more" and "\n" not in c.reason and "](" not in c.reason
+
+
+def _no_comments_and_candidates_logged(plane, logs):
+    assert not [c for c in plane.calls if c[0] == "comment" and c[1][0] == "HOME-1"]
+    assert any("HOME-1" in m and "tiny" in m for m in logs)
+
+
+def test_summary_lookup_failure_logs_candidates_and_posts_no_comments(cfg):
+    plane = FakePlane({"HOME": [item("HOME-1")], "EMPTY": []})
+    real = plane.list_open_items
+
+    def flaky(ident):
+        if ident == "BAU":
+            raise RuntimeError("lookup down")
+        return real(ident)
+
+    plane.list_open_items = flaky
+    logs = []
+    s = sweep(cfg, plane, FakeRunner([answer("HOME-1")]))
+    s.log = logs.append
+    report = s.run()
+    assert report.candidates == 0 and report.summary_ref is None
+    assert not [c for c in plane.calls if c[0] in ("comment", "create_item")]
+    _no_comments_and_candidates_logged(plane, logs)
+
+
+def test_existing_summary_comment_failure_logs_candidates_and_posts_no_comments(cfg):
+    plane = FakePlane({"HOME": [item("HOME-1")], "EMPTY": []})
+    sweep(cfg, plane, FakeRunner([answer("HOME-1")])).run()  # makes the month's summary
+    plane.calls.clear()
+    plane.comments_by_ref.clear()
+    real = plane.comment
+
+    def flaky(ref, md):
+        if ref == "BAU-99":
+            raise RuntimeError("comment down")
+        return real(ref, md)
+
+    plane.comment = flaky
+    logs = []
+    s = sweep(cfg, plane, FakeRunner([answer("HOME-1")]))
+    s.log = logs.append
+    report = s.run()
+    assert report.candidates == 0 and report.summary_ref is None
+    _no_comments_and_candidates_logged(plane, logs)

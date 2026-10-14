@@ -34,11 +34,11 @@ are in `docs/superpowers/plans/`.
 
 ## How it runs
 
-Three launchd jobs on Cere, all as the `nakomis` user:
+Four launchd jobs on Cere, all as the `nakomis` user:
 
 - `com.nakomis.bau-run` at 01:00 every night: the worker itself.
 - `com.nakomis.bau-snapshot` hourly during the day: refreshes `state.json` for the dashboard.
-- `com.nakomis.bau-sweep` on the first Sunday of the month: proposes BAU candidates (coming with the sweep, BAU-5).
+- `com.nakomis.bau-sweep` at 00:15 on the first Sunday of the month: proposes BAU candidates (a summary item in BAU and a comment on each; it never changes labels or state).
 
 Usage is bounded by a pace rule read from Claude Code's own rate-limit telemetry, a 05:00
 cut-off, and per-session budget and wall-clock limits, so the worker never eats the week.
