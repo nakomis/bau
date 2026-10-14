@@ -1,32 +1,52 @@
 from __future__ import annotations
 
 import base64
+import os
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 
-def _auth_args(token: str) -> list[str]:
+def _git_env(token: str) -> dict[str, str] | None:
+    """Pass the token via GIT_CONFIG_* env vars so it never appears in argv or ps."""
     if not token:
-        return []
+        return None
+    if "GIT_CONFIG_COUNT" in os.environ:
+        raise RuntimeError("BAU does not support a caller-supplied GIT_CONFIG_COUNT")
     basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-    return ["-c", f"http.extraheader=AUTHORIZATION: basic {basic}"]
+    return {
+        **os.environ,
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.extraheader",
+        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
+    }
 
 
 class Repos:
-    def __init__(self, repos_root: Path, work_root: Path):
+    def __init__(
+        self,
+        repos_root: Path,
+        work_root: Path,
+        runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    ):
         self.repos_root = Path(repos_root)
         self.work_root = Path(work_root)
+        self.runner = runner
         self.repos_root.mkdir(parents=True, exist_ok=True)
         self.work_root.mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
     def _git(
-        *args: str, cwd: Path | None = None, token: str = "", check: bool = True
+        self, *args: str, cwd: Path | None = None, token: str = "", check: bool = True
     ) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["git", *_auth_args(token), *args], cwd=cwd, check=check, capture_output=True, text=True
-        )
+        env: dict[str, Any] | None = _git_env(token)
+        argv = ["git", *args]
+        try:
+            return self.runner(argv, cwd=cwd, check=check, capture_output=True, text=True, env=env)
+        except subprocess.CalledProcessError as e:
+            # Re-raise without argv, env or the original exception chain: either can carry the token.
+            raise RuntimeError(f"git {args[0]} failed: {(e.stderr or '').strip()[:500]}") from None
 
     def bare_path(self, repo: str) -> Path:
         return self.repos_root / f"{repo.split('/', 1)[1]}.git"

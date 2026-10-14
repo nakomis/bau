@@ -1,3 +1,4 @@
+import base64
 import subprocess
 from pathlib import Path
 
@@ -80,3 +81,31 @@ def test_delete_checkout(upstream: Path, tmp_path: Path):
     wt = repos.create_checkout("nakomis/demo", "demo-5-del")
     repos.delete_checkout("demo-5-del")
     assert not wt.exists()
+
+
+def test_token_reaches_git_only_via_environment_and_errors_do_not_leak_it(tmp_path: Path):
+    calls: list[dict] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append({"argv": argv, "env": kwargs.get("env")})
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    repos = Repos(tmp_path / "repos", tmp_path / "work", runner=fake_run)
+    repos.ensure_bare("nakomis/demo", token="secret", origin_url="https://example.invalid/x.git")
+
+    basic = base64.b64encode(b"x-access-token:secret").decode()
+    first = calls[0]
+    assert "secret" not in " ".join(first["argv"]) and basic not in " ".join(first["argv"])
+    assert first["env"]["GIT_CONFIG_VALUE_0"] == f"AUTHORIZATION: basic {basic}"
+    assert first["env"]["GIT_CONFIG_COUNT"] == "1" and first["env"]["GIT_CONFIG_KEY_0"] == "http.extraheader"
+    for call in calls:
+        assert "secret" not in " ".join(call["argv"]) and basic not in " ".join(call["argv"])
+
+
+def test_failed_git_raises_runtime_error_without_token(tmp_path: Path):
+    repos = Repos(tmp_path / "repos", tmp_path / "work")
+    with pytest.raises(RuntimeError) as info:
+        repos.ensure_bare("nakomis/demo", token="secret", origin_url=str(tmp_path / "missing"))
+    msg = str(info.value)
+    assert msg.startswith("git clone failed:")
+    assert "secret" not in msg and "basic" not in msg
