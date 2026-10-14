@@ -218,3 +218,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Planning
+PLAN.md
+
+# Coverage
+coverage/
+lcov.info
+.coverage
+
+# uv
+.venv/
+
+# Terraform (plan 3)
+terraform/.terraform/
+terraform/*.tfstate*
+
+# SDD workspace
+.superpowers/
