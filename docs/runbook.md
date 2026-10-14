@@ -94,6 +94,14 @@ Only one `bau run` runs at a time: a second one finds `~/bau/run.lock` held, pri
 
 The job stays unloaded until `./install.sh` or `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nakomis.bau-run.plist` is run.
 
+## Dashboard and API
+
+`bau serve` runs under launchd as `com.nakomis.bau-api` on port 8800, behind Leia (which adds mTLS and the proxy token). It serves `/state.json`, the built dashboard from `web/dist`, and `POST /abandon/{ref}`.
+
+- The `proxy-token` keychain item (see "Keychain items") must exist before the API job is installed. If it is missing, `install.sh` skips `com.nakomis.bau-api` with a loud message and installs the other jobs; add the item and re-run `./install.sh`.
+- Abandon from the shell: `bau abandon REF [--note "why"]`. It restores the item's previous state first, then closes the PR, deletes the checkout, removes the `BAU` label and posts a `[bau:abandoned]` comment.
+- Abandon takes the same lock as `bau run`. While a night is running it answers 409 ("another BAU operation is in progress; try again shortly"); try again after about 05:30.
+
 ## Logs
 
 ```bash
