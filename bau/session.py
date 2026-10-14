@@ -31,9 +31,10 @@ def docker_command(
     model: str,
     budget: float,
     env_file: str | None = None,
+    docker: str = "docker",
 ) -> list[str]:
     cmd = [
-        "docker",
+        docker,
         "run",
         "--rm",
         "-i",
@@ -80,7 +81,10 @@ class SessionRunner:
         self.wall_clock_seconds = cfg.limits.session_wall_clock_minutes * 60
 
     def _kill(self, name: str) -> None:
-        subprocess.run([self.docker, "kill", name], capture_output=True)
+        try:
+            subprocess.run([self.docker, "kill", name], capture_output=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            pass
 
     def run(
         self,
@@ -94,6 +98,9 @@ class SessionRunner:
         oauth_token: str,
         log_path: Path,
     ) -> SessionResult:
+        for token in (github_token, oauth_token):
+            if "\n" in token or "\r" in token:
+                raise ValueError("session tokens must not contain newlines")
         log_path.parent.mkdir(parents=True, exist_ok=True)
         fd, env_file = tempfile.mkstemp(prefix="bau-env-")
         try:
@@ -111,13 +118,17 @@ class SessionRunner:
                 model=model,
                 budget=self.cfg.limits.session_budget_usd,
                 env_file=env_file,
+                docker=self.docker,
             )
             proc = subprocess.Popen(
-                cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                encoding="utf-8",
+                errors="replace",
             )
             assert proc.stdin and proc.stdout
-            proc.stdin.write(brief)
-            proc.stdin.close()
 
             latest: RateLimit | None = None
             result: dict | None = None
@@ -134,30 +145,51 @@ class SessionRunner:
                         return
                     time.sleep(0.2)
 
+            def feed():
+                # A child that never reads, or has exited, breaks the pipe: that is not an error here.
+                try:
+                    proc.stdin.write(brief)
+                except (OSError, ValueError):
+                    pass
+                finally:
+                    try:
+                        proc.stdin.close()
+                    except (OSError, ValueError):
+                        pass
+
             threading.Thread(target=watchdog, daemon=True).start()
-            with open(log_path, "a") as log:
-                for line in proc.stdout:
-                    log.write(line)
-                    obj = parse_stream_line(line)
-                    if not obj:
-                        continue
-                    rl = rate_limit_from_event(obj)
-                    if rl:
-                        latest = rl
-                        if rl.status == "rejected":
-                            killed = killed or "rate_limited"
-                            self._kill(name)
-                            proc.kill()
-                            break
-                        if rl.five_hour and rl.five_hour.utilization >= self.cfg.limits.five_hour_kill:
-                            killed = killed or "killed_five_hour"
-                            self._kill(name)
-                            proc.kill()
-                            break
-                    if obj.get("type") == "result":
-                        result = obj
-            code = proc.wait()
-            proc.stdout.close()
+            threading.Thread(target=feed, daemon=True).start()
+            try:
+                with open(log_path, "a", encoding="utf-8", errors="replace") as log:
+                    for line in proc.stdout:
+                        log.write(line)
+                        obj = parse_stream_line(line)
+                        if not obj:
+                            continue
+                        rl = rate_limit_from_event(obj)
+                        if rl:
+                            latest = rl
+                            if rl.status == "rejected":
+                                killed = killed or "rate_limited"
+                                self._kill(name)
+                                proc.kill()
+                                break
+                            if rl.five_hour and rl.five_hour.utilization >= self.cfg.limits.five_hour_kill:
+                                killed = killed or "killed_five_hour"
+                                self._kill(name)
+                                proc.kill()
+                                break
+                        if obj.get("type") == "result":
+                            result = obj
+                code = proc.wait()
+            except BaseException:
+                # Anything going wrong mid-session must not leave the container running.
+                self._kill(name)
+                proc.kill()
+                proc.wait()
+                raise
+            finally:
+                proc.stdout.close()
         finally:
             os.unlink(env_file)
 

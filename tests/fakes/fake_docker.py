@@ -12,8 +12,20 @@ if argv and argv[0] == "kill":
     open(os.environ["FAKE_KILL_LOG"], "a").write("killed\n")
     sys.exit(0)
 
-brief = sys.stdin.read()
-open(os.environ["FAKE_BRIEF_LOG"], "w").write(brief)
+if argv and argv[0] == "run":
+    with open(os.environ["FAKE_ARGV_LOG"], "a") as f:
+        f.write(json.dumps(argv) + "\n")
+    if "--env-file" in argv:
+        env_path = argv[argv.index("--env-file") + 1]
+        with open(env_path) as f:
+            contents = f.read()
+        record = {"contents": contents, "mode": oct(os.stat(env_path).st_mode & 0o777)}
+        with open(os.environ["FAKE_ENV_LOG"], "a") as f:
+            f.write(json.dumps(record) + "\n")
+
+if mode != "noread":
+    brief = sys.stdin.read()
+    open(os.environ["FAKE_BRIEF_LOG"], "w").write(brief)
 
 
 def emit(obj):
@@ -69,10 +81,43 @@ elif mode == "limit":
             "total_cost_usd": 0,
         }
     )
+elif mode == "limit_text":
+    emit(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": True,
+            "result": "You've hit your weekly limit · resets Mon",
+            "total_cost_usd": 0,
+        }
+    )
+elif mode == "no_result_exit0":
+    pass
+elif mode == "is_error":
+    emit(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": True,
+            "result": "boom",
+            "total_cost_usd": 0.05,
+        }
+    )
+elif mode == "result_exit2":
+    emit(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "fine",
+            "total_cost_usd": 0.1,
+        }
+    )
+    sys.exit(2)
 elif mode == "five_hour":
     rl(0.85, 0.3)
     time.sleep(5)
-elif mode == "slow":
+elif mode in ("slow", "noread"):
     time.sleep(5)
 elif mode == "crash":
     sys.exit(3)
