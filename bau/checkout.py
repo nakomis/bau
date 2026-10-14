@@ -66,11 +66,15 @@ class Repos:
     def fetch(self, repo: str, token: str) -> None:
         self._git("fetch", "--prune", "origin", cwd=self.bare_path(repo), token=token)
 
+    # Checkouts are always fresh clones made before a session starts. After a session has written to
+    # one, the host never runs git inside it again: its .git/config could name hooks, fsmonitor or a
+    # hostile remote. --shared borrows the bare repo's objects through alternates, so no object file
+    # is hardlinked into a directory the container can write.
     def create_checkout(self, repo: str, branch: str) -> Path:
         bare = self.bare_path(repo)
         dest = self.checkout_path(branch)
         origin = self._git("remote", "get-url", "origin", cwd=bare).stdout.strip()
-        self._git("clone", "--reference", str(bare), "--branch", "main", str(bare), str(dest))
+        self._git("clone", "--shared", "--branch", "main", str(bare), str(dest))
         self._git("remote", "set-url", "origin", origin, cwd=dest)
         self._git("checkout", "-b", branch, cwd=dest)
         return dest
@@ -79,12 +83,12 @@ class Repos:
         return self.checkout_path(branch).exists()
 
     def checkout_branch(self, repo: str, branch: str, token: str = "") -> Path:
-        """Re-create a checkout of an already-pushed branch (e.g. for an open PR whose checkout is gone)."""
+        """Fresh clone of an already-pushed branch, made before every feedback session."""
         bare = self.bare_path(repo)
         dest = self.checkout_path(branch)
         origin = self._git("remote", "get-url", "origin", cwd=bare).stdout.strip()
         try:
-            self._git("clone", "--reference", str(bare), "--branch", "main", str(bare), str(dest))
+            self._git("clone", "--shared", "--branch", "main", str(bare), str(dest))
             self._git("remote", "set-url", "origin", origin, cwd=dest)
             self._git(
                 "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}", cwd=dest, token=token
@@ -97,22 +101,3 @@ class Repos:
 
     def delete_checkout(self, branch: str) -> None:
         shutil.rmtree(self.checkout_path(branch), ignore_errors=True)
-
-    def rebase_onto_main(self, branch: str, token: str) -> bool:
-        wt = self.checkout_path(branch)
-        self._git("fetch", "origin", "main", cwd=wt, token=token)
-        result = self._git("rebase", "origin/main", cwd=wt, check=False)
-        if result.returncode != 0:
-            self._git("rebase", "--abort", cwd=wt, check=False)
-            return False
-        return True
-
-    def diff_stats(self, branch: str) -> tuple[int, int]:
-        wt = self.checkout_path(branch)
-        out = self._git("diff", "--numstat", "origin/main...HEAD", cwd=wt).stdout.strip().splitlines()
-        files = len(out)
-        lines = 0
-        for row in out:
-            added, deleted, _ = row.split("\t", 2)
-            lines += (int(added) if added.isdigit() else 0) + (int(deleted) if deleted.isdigit() else 0)
-        return files, lines

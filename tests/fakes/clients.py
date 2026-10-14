@@ -13,6 +13,7 @@ from bau.session import SessionResult
 class FakePlane:
     def __init__(self, items: dict[str, list[Item]], comments: dict[str, list[Comment]] | None = None):
         self.items, self.comments_by_ref, self.calls = items, comments or {}, []
+        self.unreachable: Exception | None = None
 
     def list_items(self, identifier, label):
         return [i for i in self.items.get(identifier, []) if label in i.labels]
@@ -28,6 +29,11 @@ class FakePlane:
 
     def project_url(self, ref):
         return f"https://plane.test/{ref}"
+
+    def _project(self, identifier):
+        if self.unreachable:
+            raise self.unreachable
+        return {"project": {"identifier": identifier}}
 
     def comment(self, ref, markdown):
         self.calls.append(("comment", (ref, markdown)))
@@ -69,6 +75,7 @@ class FakeGitHub:
         self.merged, self.calls = merged or {}, []
         self.comments_by_pr = issue_comments or {}
         self.summaries = summaries
+        self.merged_since: list[str] = []
 
     def open_prs(self, repo, author):
         return self.open.get(repo, [])
@@ -77,6 +84,7 @@ class FakeGitHub:
         return next(p for p in self.open.get(repo, []) if p.number == number)
 
     def merged_prs_since(self, repo, author, since_iso):
+        self.merged_since.append(since_iso)
         return self.merged.get(repo, [])
 
     def review_threads(self, repo, number):
@@ -123,8 +131,8 @@ class FakeRunner:
 
 
 class FakeRepos(Repos):
-    def __init__(self, root: Path, rebase_ok: bool = True, stats=(1, 10), existing: tuple[str, ...] = ()):
-        self.root, self.rebase_ok, self.stats, self.calls = root, rebase_ok, stats, []
+    def __init__(self, root: Path, existing: tuple[str, ...] = ()):
+        self.root, self.calls = root, []
         self.checkouts = set(existing)
         self.repos_root, self.work_root = root / "repos", root / "work"
 
@@ -147,16 +155,11 @@ class FakeRepos(Repos):
 
     def checkout_branch(self, repo, branch, token=""):
         self.calls.append(("checkout_branch", repo, branch))
+        if branch in self.checkouts:
+            raise RuntimeError(f"git clone failed: destination path for {branch} already exists")
         self.checkouts.add(branch)
         return self.checkout_path(branch)
 
     def delete_checkout(self, branch):
         self.calls.append(("delete_checkout", branch))
         self.checkouts.discard(branch)
-
-    def rebase_onto_main(self, branch, token):
-        self.calls.append(("rebase", branch))
-        return self.rebase_ok
-
-    def diff_stats(self, branch):
-        return self.stats

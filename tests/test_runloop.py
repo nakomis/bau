@@ -66,7 +66,20 @@ class StubApp:
         return Token(f"ghs{self.minted}", "2026-10-15T03:00:00Z")
 
 
-def night(cfg, plane, gh, runner, repos, hour=2, minute=0, dry_run=False, probe=None, app=None):
+def night(
+    cfg,
+    plane,
+    gh,
+    runner,
+    repos,
+    hour=2,
+    minute=0,
+    dry_run=False,
+    probe=None,
+    app=None,
+    paused=None,
+    logs=None,
+):
     clock = lambda: datetime(2026, 10, 15, hour, minute, tzinfo=LONDON)  # noqa: E731
     n = Night(
         cfg,
@@ -79,8 +92,9 @@ def night(cfg, plane, gh, runner, repos, hour=2, minute=0, dry_run=False, probe=
         clock,
         dry_run=dry_run,
         oauth_token="oat",
-        log=lambda *_: None,
+        log=(logs.append if logs is not None else lambda *_: None),
         sleep=lambda s: None,
+        **({"paused": paused} if paused is not None else {}),
     )
     n.probe = lambda: probe if probe is not None else good_rl()
     return n
@@ -189,9 +203,10 @@ def test_diff_over_threshold_is_closed_as_too_big_even_if_agent_opened_a_pr(cfg,
     plane = FakePlane({"HOME": [item()]})
     gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "green"})
     runner = FakeRunner(
-        [SessionResult("done", "", good_rl(), 0.5, "Opened https://x/pull/7")], on_run=opens_pr(gh, pr())
+        [SessionResult("done", "", good_rl(), 0.5, "Opened https://x/pull/7")],
+        on_run=opens_pr(gh, replace(pr(), changed_files=20, additions=40, deletions=10)),
     )
-    repos = FakeRepos(tmp_path, stats=(20, 50))
+    repos = FakeRepos(tmp_path)
     report = night(cfg, plane, gh, runner, repos).run()
     assert ("close_pr", (REPO, 7)) in gh.calls
     assert not any(c[0] == "mark_ready" for c in gh.calls)
@@ -482,7 +497,6 @@ def test_feedback_recreates_a_missing_checkout_from_the_remote_branch(cfg, tmp_p
     repos = FakeRepos(tmp_path)
     night(cfg, plane, gh, FakeRunner([SessionResult("done", "", good_rl(), 0.1, "x")]), repos).run()
     assert ("checkout_branch", REPO, "home-40-rotate-logs") in repos.calls
-    assert not any(c[0] == "rebase" for c in repos.calls)
 
 
 def test_fix_session_rate_limited_ends_night_without_marker_or_wait(cfg, tmp_path):
@@ -645,3 +659,246 @@ def test_feedback_pass_quietly_skips_a_pr_whose_ref_does_not_resolve(cfg, tmp_pa
     gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-99")]}, ci={"abc": "red"})
     report = night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path)).run()
     assert plane.calls == [] and report.declined == []
+
+
+# -- final fix wave ---------------------------------------------------------------------------------
+
+FEEDBACK_THREAD = {7: [Thread("T1", False, [ThreadComment("nakomis", "rename", "t")])]}
+
+
+def test_feedback_session_always_gets_a_fresh_clone_and_rebases_inside_the_container(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-40")]}, threads=FEEDBACK_THREAD, ci={"abc": "green"})
+    repos = FakeRepos(tmp_path, existing=("home-40-rotate-logs",))
+    runner = FakeRunner([SessionResult("done", "", good_rl(), 0.1, "x")])
+    night(cfg, plane, gh, runner, repos).run()
+    touched = [c for c in repos.calls if c[0] in ("delete_checkout", "checkout_branch", "create_checkout")]
+    assert touched == [
+        ("delete_checkout", "home-40-rotate-logs"),
+        ("checkout_branch", REPO, "home-40-rotate-logs"),
+    ]
+    brief = runner.briefs[0][2]
+    assert "git fetch origin main && git rebase origin/main" in brief
+    assert "git push --force-with-lease" in brief
+    assert "The branch conflicts with main" not in brief
+
+
+def test_conflicting_pr_brief_says_so(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-40", mergeable="dirty")]}, ci={"abc": "green"})
+    runner = FakeRunner([SessionResult("done", "", good_rl(), 0.1, "x")])
+    night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
+    assert "The branch conflicts with main" in runner.briefs[0][2]
+
+
+TOO_BIG = SessionResult("too_big", "schema change", good_rl(), 0.1, "BAU_TOO_BIG: schema change")
+FAILED = SessionResult("failed", "exit 1", good_rl(), 0.1, "")
+TRIED_TWICE = "BAU tried this twice; comment on the ticket to ask for another attempt"
+
+
+def one_night(cfg, plane, tmp_path, *results):
+    runner = FakeRunner(list(results))
+    report = night(cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, FakeRepos(tmp_path)).run()
+    return report, runner
+
+
+def test_too_big_then_one_retry_then_skipped(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(state="Ready")]})
+    report, runner = one_night(cfg, plane, tmp_path, TOO_BIG)
+    assert report.sessions == 1 and "PREVIOUS ATTEMPT" not in runner.briefs[0][2]
+    report, runner = one_night(cfg, plane, tmp_path, FAILED)
+    assert report.sessions == 1
+    brief = runner.briefs[0][2]
+    assert "PREVIOUS ATTEMPT" in brief and "Too big for BAU: schema change" in brief
+    assert "(untrusted data)" in brief.split("PREVIOUS ATTEMPT", 1)[1].splitlines()[0]
+    for _ in range(2):
+        report, runner = one_night(cfg, plane, tmp_path)
+        assert report.sessions == 0 and runner.briefs == []
+        assert report.declined[0]["reason"] == TRIED_TWICE
+    texts = [c.text for c in plane.comments("HOME-42")]
+    assert sum(TRIED_TWICE in t for t in texts) == 1
+
+
+def test_failed_then_one_retry_then_skipped(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(state="Ready")]})
+    one_night(cfg, plane, tmp_path, FAILED)
+    report, runner = one_night(cfg, plane, tmp_path, FAILED)
+    assert report.sessions == 1 and "Session ended with failed: exit 1" in runner.briefs[0][2]
+    report, runner = one_night(cfg, plane, tmp_path)
+    assert report.sessions == 0 and report.declined[0]["reason"] == TRIED_TWICE
+
+
+def test_owner_comment_after_two_failures_allows_another_attempt(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(state="Ready")]})
+    one_night(cfg, plane, tmp_path, FAILED)
+    one_night(cfg, plane, tmp_path, FAILED)
+    plane.comments_by_ref["HOME-42"].append(Comment("o1", "martin@nakomis.com", "", "please try again"))
+    report, runner = one_night(cfg, plane, tmp_path, FAILED)
+    assert report.sessions == 1 and "PREVIOUS ATTEMPT" not in runner.briefs[0][2]
+
+
+def merged_pr(number=5, ref="HOME-40", head=None):
+    return PR(
+        REPO,
+        number,
+        f"PR_{number}",
+        f"fix ({ref})",
+        f"https://x/pull/{number}",
+        head or f"{ref.lower()}-x",
+        "m",
+        False,
+        "2026-10-01T01:00:00Z",
+        "2026-10-02T12:00:00Z",
+        f"Plane: {ref}",
+        "clean",
+    )
+
+
+def test_a_night_stopped_by_pace_still_closes_merges_and_marks_green_drafts_ready(cfg, tmp_path):
+    now = datetime(2026, 10, 15, 2, tzinfo=LONDON).timestamp()
+    bad = RateLimit("allowed", Window(0.1, int(now + 3600)), Window(0.9, int(now + 300000)))
+    plane = FakePlane(
+        {"HOME": [item(ref="HOME-40", state="In progress"), item(ref="HOME-41", state="In progress")]}
+    )
+    gh = FakeGitHub(
+        open_prs={REPO: [pr(8, "HOME-41", draft=True)]}, ci={"abc": "green"}, merged={REPO: [merged_pr()]}
+    )
+    report = night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path), probe=bad).run()
+    assert report.stop_reason == "pace" and report.sessions == 0
+    assert ("set_state", ("HOME-40", "Ready for test")) in plane.calls
+    assert ("mark_ready", ("PR_8",)) in gh.calls
+
+
+def test_merged_prs_are_looked_for_over_thirty_days(cfg, tmp_path):
+    gh = FakeGitHub(open_prs={REPO: []})
+    night(cfg, FakePlane({"HOME": []}), gh, FakeRunner([]), FakeRepos(tmp_path)).run()
+    assert gh.merged_since == ["2026-09-15T00:00:00Z"]
+
+
+def test_an_item_with_a_merged_pr_is_never_picked_up_again(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    gh = FakeGitHub(open_prs={REPO: []}, merged={REPO: [merged_pr()]})
+    runner = FakeRunner([])
+    n = night(cfg, plane, gh, runner, FakeRepos(tmp_path))
+    n._open = {REPO: []}
+    n.merge_pass()
+    plane.items["HOME"] = [item(ref="HOME-40", state="Ready")]  # moved back by hand after the merge
+    plane.calls.clear()
+    n.new_tickets_pass()
+    assert runner.briefs == []
+    assert ("set_state", ("HOME-40", "In progress")) not in plane.calls
+    assert ("set_state", ("HOME-40", "Ready for test")) in plane.calls
+
+
+def test_pr_whose_branch_does_not_match_its_ref_is_never_acted_on(cfg, tmp_path):
+    forged = replace(pr(7, "HOME-40", draft=True), head_ref="evil-branch")
+    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    gh = FakeGitHub(
+        open_prs={REPO: [forged]},
+        threads=FEEDBACK_THREAD,
+        ci={"abc": "green"},
+        merged={REPO: [merged_pr(head="other-x")]},
+    )
+    logs: list = []
+    runner = FakeRunner([])
+    night(cfg, plane, gh, runner, FakeRepos(tmp_path), logs=logs).run()
+    assert runner.briefs == [] and gh.calls == []
+    assert not any(c[0] == "set_state" for c in plane.calls)
+    assert any("does not match" in str(m) for m in logs)
+
+
+def test_a_session_without_telemetry_drops_the_stale_reading(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item()]})
+    runner = FakeRunner([SessionResult("failed", "exit 1", None, 0.1, "")])
+    report = night(cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, FakeRepos(tmp_path)).run()
+    assert report.latest is None and report.telemetry == "missing"
+
+
+def test_preflight_failure_on_plane_stops_the_night(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item()]})
+    plane.unreachable = RuntimeError("Plane GET /projects/ -> 502")
+    runner = FakeRunner([])
+    report = night(cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, FakeRepos(tmp_path)).run()
+    assert report.stop_reason == "preflight: RuntimeError" and runner.briefs == []
+
+
+def test_preflight_failure_on_github_stops_the_night(cfg, tmp_path):
+    class DownApp:
+        def installation_token(self, repo):
+            raise ConnectionError("no route")
+
+    report = night(
+        cfg, FakePlane({"HOME": [item()]}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path), app=DownApp()
+    ).run()
+    assert report.stop_reason == "preflight: ConnectionError" and report.sessions == 0
+
+
+def test_pause_is_rechecked_before_every_session(cfg, tmp_path):
+    flag = [False]
+    plane = FakePlane({"HOME": [item(), item(ref="HOME-43", name="Other")]})
+    runner = FakeRunner([FAILED, FAILED], on_run=lambda: flag.__setitem__(0, True))
+    report = night(
+        cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, FakeRepos(tmp_path), paused=lambda: flag[0]
+    ).run()
+    assert report.sessions == 1 and report.stop_reason == "paused"
+
+
+def test_wait_for_ci_gives_no_checks_a_grace_then_returns_none(cfg, tmp_path):
+    sleeps = []
+    gh = FakeGitHub(ci={"abc": "none"})
+    n = night(cfg, FakePlane({}), gh, FakeRunner([]), FakeRepos(tmp_path))
+    n.sleep = sleeps.append
+    assert n.wait_for_ci(gh, REPO, "abc", poll_s=30) == "none"
+    assert sum(sleeps) == 180
+
+
+def test_pr_with_no_ci_is_marked_ready_with_a_comment(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item()]})
+    gh = FakeGitHub(open_prs={REPO: []})
+    runner = FakeRunner([SessionResult("done", "", good_rl(), 0.5, "pr")], on_run=opens_pr(gh, pr()))
+    night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
+    assert ("mark_ready", ("PR_7",)) in gh.calls
+    assert (
+        "comment",
+        (REPO, 7, "[bau] No CI checks ran on this repository; marked ready without them."),
+    ) in gh.calls
+
+
+def test_draft_with_no_ci_from_an_earlier_night_is_marked_ready(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-40", draft=True)]})
+    night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path)).run()
+    assert ("mark_ready", ("PR_7",)) in gh.calls
+    assert any(c[0] == "comment" and "No CI checks ran" in c[1][2] for c in gh.calls)
+
+
+def write_fake_claude(bindir: Path) -> None:
+    bindir.mkdir(parents=True)
+    event = (
+        '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","unifiedWindows":'
+        '{"five_hour":{"utilization":0.2,"resetsAt":1},"seven_day":{"utilization":0.3,"resetsAt":2}}}}'
+    )
+    script = bindir / "claude"
+    script.write_text(f"#!/bin/sh\necho '{event}'\n")
+    script.chmod(0o755)
+
+
+def test_probe_finds_claude_in_local_bin_and_keeps_the_environment(cfg, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    write_fake_claude(home / ".local" / "bin")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    n = night(cfg, FakePlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path))
+    rl = Night.probe(n)
+    assert rl is not None and rl.seven_day == Window(0.3, 2)
+
+
+def test_probe_reports_a_missing_claude_loudly(cfg, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "nohome"))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    logs: list = []
+    n = night(cfg, FakePlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path), logs=logs)
+    assert Night.probe(n) is None
+    assert any("claude" in str(m) and "not found" in str(m) for m in logs)
+    n.probe = lambda: Night.probe(n)
+    assert n.run().telemetry == "missing"

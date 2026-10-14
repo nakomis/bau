@@ -1,4 +1,5 @@
 import base64
+import os
 import subprocess
 from pathlib import Path
 
@@ -44,35 +45,32 @@ def test_bare_clone_and_two_checkouts_share_objects(upstream: Path, tmp_path: Pa
     assert not (b / "a.txt").exists()
 
 
-def test_fetch_rebase_and_diff_stats(upstream: Path, tmp_path: Path):
+def test_repos_never_runs_git_inside_a_used_checkout():
+    # The host must not run git in a directory a session has written (its .git/config is hostile).
+    assert not hasattr(Repos, "rebase_onto_main")
+    assert not hasattr(Repos, "diff_stats")
+
+
+def _object_files(objects: Path) -> list[Path]:
+    return [p for p in objects.rglob("*") if p.is_file() and p.parent.name != "info"]
+
+
+@pytest.mark.parametrize("method", ["create_checkout", "checkout_branch"])
+def test_checkouts_borrow_objects_by_alternates_never_by_hardlink(upstream: Path, tmp_path: Path, method):
     repos = Repos(tmp_path / "repos", tmp_path / "work")
-    repos.ensure_bare("nakomis/demo", token="", origin_url=str(upstream))
-    wt = repos.create_checkout("nakomis/demo", "demo-3-rebase")
-    (wt / "mine.txt").write_text("mine\n")
-    git("add", ".", cwd=wt)
-    git("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-m", "mine", cwd=wt)
-
-    (upstream / "up.txt").write_text("up\n")
-    git("add", ".", cwd=upstream)
-    git("commit", "-m", "up", cwd=upstream)
-
-    repos.fetch("nakomis/demo", token="")
-    assert repos.rebase_onto_main("demo-3-rebase", token="") is True
-    assert (wt / "up.txt").exists() and (wt / "mine.txt").exists()
-    assert repos.diff_stats("demo-3-rebase") == (1, 1)
-
-
-def test_rebase_conflict_is_reported_and_aborted(upstream: Path, tmp_path: Path):
-    repos = Repos(tmp_path / "repos", tmp_path / "work")
-    repos.ensure_bare("nakomis/demo", token="", origin_url=str(upstream))
-    wt = repos.create_checkout("nakomis/demo", "demo-4-conflict")
-    (wt / "README.md").write_text("mine\n")
-    git("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-am", "mine", cwd=wt)
-    (upstream / "README.md").write_text("theirs\n")
-    git("commit", "-am", "theirs", cwd=upstream)
-    repos.fetch("nakomis/demo", token="")
-    assert repos.rebase_onto_main("demo-4-conflict", token="") is False
-    assert git("status", "--porcelain", cwd=wt) == ""
+    # file:// forces a real transfer, so the bare repo's own files start with one link each.
+    bare = repos.ensure_bare("nakomis/demo", token="", origin_url=f"file://{upstream}")
+    if method == "create_checkout":
+        wt = repos.create_checkout("nakomis/demo", "demo-6-links")
+    else:
+        git("branch", "demo-6-links", "main", cwd=upstream)
+        repos.fetch("nakomis/demo", token="")
+        wt = repos.checkout_branch("nakomis/demo", "demo-6-links")
+    files = _object_files(bare / "objects")
+    assert files
+    assert all(os.stat(f).st_nlink == 1 for f in files)
+    alternates = (wt / ".git" / "objects" / "info" / "alternates").read_text().strip()
+    assert alternates == str(bare / "objects")
 
 
 def test_delete_checkout(upstream: Path, tmp_path: Path):
