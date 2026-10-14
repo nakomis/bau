@@ -236,3 +236,6 @@ terraform/*.tfstate*
 
 # SDD workspace
 .superpowers/
+web/node_modules/
+web/dist/
+web/coverage/
