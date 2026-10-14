@@ -75,6 +75,22 @@ class Repos:
         self._git("checkout", "-b", branch, cwd=dest)
         return dest
 
+    def has_checkout(self, branch: str) -> bool:
+        return self.checkout_path(branch).exists()
+
+    def checkout_branch(self, repo: str, branch: str, token: str = "") -> Path:
+        """Re-create a checkout of an already-pushed branch (e.g. for an open PR whose checkout is gone)."""
+        bare = self.bare_path(repo)
+        dest = self.checkout_path(branch)
+        origin = self._git("remote", "get-url", "origin", cwd=bare).stdout.strip()
+        self._git("clone", "--reference", str(bare), "--branch", "main", str(bare), str(dest))
+        self._git("remote", "set-url", "origin", origin, cwd=dest)
+        self._git(
+            "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}", cwd=dest, token=token
+        )
+        self._git("checkout", "-B", branch, f"origin/{branch}", cwd=dest)
+        return dest
+
     def delete_checkout(self, branch: str) -> None:
         shutil.rmtree(self.checkout_path(branch), ignore_errors=True)
 

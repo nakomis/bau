@@ -61,7 +61,12 @@ LIST_PR_JSON = {
     if k not in ("mergeable_state", "changed_files", "additions", "deletions")
 }
 CLOSED_ROWS = [
-    {**LIST_PR_JSON, "number": 11, "merged_at": "2026-10-15T12:00:00Z"},  # included
+    {
+        **LIST_PR_JSON,
+        "number": 11,
+        "merged_at": "2026-10-15T12:00:00Z",
+        "merge_commit_sha": "deadbeefcafe",
+    },  # included
     {**LIST_PR_JSON, "number": 12, "merged_at": "2026-10-10T12:00:00Z"},  # merged before since
     {**LIST_PR_JSON, "number": 13, "user": {"login": "nakomis"}, "merged_at": "2026-10-15T12:00:00Z"},
     {**LIST_PR_JSON, "number": 14, "merged_at": None},  # closed, not merged
@@ -249,6 +254,7 @@ def test_review_threads_graphql_shape():
 def test_merged_prs_since_filters_by_author_and_merge_time():
     prs = client().merged_prs_since("nakomis/home-infra", "nakomis-bau[bot]", "2026-10-14T00:00:00Z")
     assert [p.number for p in prs] == [11]
+    assert prs[0].merge_commit_sha == "deadbeefcafe"
 
 
 def test_write_methods_send_expected_requests():

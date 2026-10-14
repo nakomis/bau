@@ -109,3 +109,17 @@ def test_failed_git_raises_runtime_error_without_token(tmp_path: Path):
     msg = str(info.value)
     assert msg.startswith("git clone failed:")
     assert "secret" not in msg and "basic" not in msg
+
+
+def test_checkout_branch_recreates_a_pushed_branch(upstream: Path, tmp_path: Path):
+    repos = Repos(tmp_path / "repos", tmp_path / "work")
+    repos.ensure_bare("nakomis/demo", token="", origin_url=str(upstream))
+    git("checkout", "-b", "demo-9-pushed", cwd=upstream)
+    (upstream / "pushed.txt").write_text("pushed\n")
+    git("add", ".", cwd=upstream)
+    git("commit", "-m", "pushed", cwd=upstream)
+    git("checkout", "main", cwd=upstream)
+    wt = repos.checkout_branch("nakomis/demo", "demo-9-pushed")
+    assert git("rev-parse", "--abbrev-ref", "HEAD", cwd=wt) == "demo-9-pushed"
+    assert (wt / "pushed.txt").read_text() == "pushed\n"
+    assert git("remote", "get-url", "origin", cwd=wt) == str(upstream)

@@ -106,19 +106,23 @@ class FakeGitHub:
 
 
 class FakeRunner:
-    def __init__(self, results: list[SessionResult], on_run: Callable[[], None] | None = None):
+    def __init__(self, results: list[SessionResult | Exception], on_run: Callable[[], None] | None = None):
         self.results, self.briefs, self.on_run = list(results), [], on_run
 
     def run(self, *, name, checkout, bare, brief, model, github_token, oauth_token, log_path):
         self.briefs.append((name, model, brief))
         if self.on_run:
             self.on_run()
-        return self.results.pop(0)
+        outcome = self.results.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
 
 class FakeRepos(Repos):
-    def __init__(self, root: Path, rebase_ok: bool = True, stats=(1, 10)):
+    def __init__(self, root: Path, rebase_ok: bool = True, stats=(1, 10), existing: tuple[str, ...] = ()):
         self.root, self.rebase_ok, self.stats, self.calls = root, rebase_ok, stats, []
+        self.checkouts = set(existing)
         self.repos_root, self.work_root = root / "repos", root / "work"
 
     def ensure_bare(self, repo, token, origin_url=None):
@@ -130,10 +134,22 @@ class FakeRepos(Repos):
 
     def create_checkout(self, repo, branch):
         self.calls.append(("create_checkout", repo, branch))
+        if branch in self.checkouts:
+            raise RuntimeError(f"git clone failed: destination path for {branch} already exists")
+        self.checkouts.add(branch)
+        return self.checkout_path(branch)
+
+    def has_checkout(self, branch):
+        return branch in self.checkouts
+
+    def checkout_branch(self, repo, branch, token=""):
+        self.calls.append(("checkout_branch", repo, branch))
+        self.checkouts.add(branch)
         return self.checkout_path(branch)
 
     def delete_checkout(self, branch):
         self.calls.append(("delete_checkout", branch))
+        self.checkouts.discard(branch)
 
     def rebase_onto_main(self, branch, token):
         self.calls.append(("rebase", branch))

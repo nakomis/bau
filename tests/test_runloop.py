@@ -400,3 +400,209 @@ def test_probe_uses_subscription_login_and_never_bare(cfg, tmp_path, monkeypatch
     assert Night.probe(n) is None
     assert "--disable-slash-commands" in seen["cmd"] and "--bare" not in seen["cmd"]
     assert seen["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "oat"
+
+
+def test_a_crashing_ticket_does_not_abort_the_night(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(), item(ref="HOME-43", name="Other")]})
+    gh = FakeGitHub(open_prs={REPO: []})
+    runner = FakeRunner([RuntimeError("docker exploded"), SessionResult("done", "", good_rl(), 0.1, "x")])
+    report = night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
+    assert [b[0] for b in runner.briefs] == ["bau-home-42", "bau-home-43"]
+    assert report.sessions == 2
+    failed = [d for d in report.declined if d["ref"] == "HOME-42"]
+    assert len(failed) == 1 and failed[0]["reason"] == "error: RuntimeError: docker exploded"
+    assert any(c[0] == "comment" and "Error while working this ticket" in c[1][1] for c in plane.calls)
+
+
+def test_a_crashing_pr_in_the_feedback_pass_is_recorded_and_skipped(cfg, tmp_path):
+    plane = FakePlane(
+        {"HOME": [item(ref="HOME-40", state="In progress"), item(ref="HOME-41", state="In progress")]}
+    )
+    gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-40"), pr(8, "HOME-41")]}, ci={"abc": "red"})
+    gh.review_threads = lambda repo, n: (_ for _ in ()).throw(ValueError("boom")) if n == 7 else []
+    runner = FakeRunner([SessionResult("done", "", good_rl(), 0.1, "x")])
+    report = night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
+    assert [d["ref"] for d in report.declined] == ["HOME-40"]
+    assert runner.briefs[0][0] == "bau-home-41"
+
+
+def test_a_crashing_merged_pr_is_recorded_and_skipped(cfg, tmp_path):
+    def merged_pr(n, ref):
+        return PR(
+            REPO,
+            n,
+            "n",
+            f"fix ({ref})",
+            "u",
+            f"{ref.lower()}-x",
+            "m",
+            False,
+            "t",
+            "2026-10-14T12:00:00Z",
+            "",
+            "clean",
+        )
+
+    plane = FakePlane(
+        {"HOME": [item(ref="HOME-40", state="In progress"), item(ref="HOME-41", state="In progress")]}
+    )
+    gh = FakeGitHub(open_prs={}, merged={REPO: [merged_pr(5, "HOME-40"), merged_pr(6, "HOME-41")]})
+    repos = FakeRepos(tmp_path)
+    original = repos.delete_checkout
+
+    def flaky(branch):
+        if branch == "home-40-x":
+            raise OSError("disk")
+        original(branch)
+
+    repos.delete_checkout = flaky
+    report = night(cfg, plane, gh, FakeRunner([]), repos).run()
+    assert [d["ref"] for d in report.declined] == ["HOME-40"]
+    assert ("set_state", ("HOME-41", "Ready for test")) in plane.calls
+
+
+def test_leftover_checkout_from_a_failed_night_is_replaced(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item()]})
+    repos = FakeRepos(tmp_path, existing=("home-42-rotate-logs",))
+    runner = FakeRunner([SessionResult("failed", "no result line", good_rl(), 0.1, "")])
+    report = night(cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, repos).run()
+    assert report.sessions == 1 and report.declined == []
+    names = [c[0] for c in repos.calls if c[0] in ("delete_checkout", "create_checkout")]
+    assert names == ["delete_checkout", "create_checkout"]
+
+
+def test_feedback_recreates_a_missing_checkout_from_the_remote_branch(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    gh = FakeGitHub(
+        open_prs={REPO: [pr(7, "HOME-40")]},
+        threads={7: [Thread("T1", False, [ThreadComment("nakomis", "rename", "t")])]},
+        ci={"abc": "green"},
+    )
+    repos = FakeRepos(tmp_path)
+    night(cfg, plane, gh, FakeRunner([SessionResult("done", "", good_rl(), 0.1, "x")]), repos).run()
+    assert ("checkout_branch", REPO, "home-40-rotate-logs") in repos.calls
+    assert not any(c[0] == "rebase" for c in repos.calls)
+
+
+def test_fix_session_rate_limited_ends_night_without_marker_or_wait(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(), item(ref="HOME-43", name="Other")]})
+    gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "red"})
+    sleeps = []
+    runner = FakeRunner(
+        [
+            SessionResult("done", "", good_rl(), 0.5, "pr"),
+            SessionResult("rate_limited", "limit", None, 0.1, ""),
+        ],
+        on_run=opens_pr(gh, pr()),
+    )
+    n = night(cfg, plane, gh, runner, FakeRepos(tmp_path))
+    n.sleep = sleeps.append
+    report = n.run()
+    assert report.stop_reason == "rejected" and report.sessions == 2
+    assert not any(c[0] == "comment" and "[bau:ci-fix]" in c[1][2] for c in gh.calls)
+    assert len(sleeps) == 0
+    assert not any(c[0] == "mark_ready" for c in gh.calls)
+
+
+def test_failed_fix_session_still_counts_and_leaves_draft(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item()]})
+    gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "red"})
+    runner = FakeRunner(
+        [
+            SessionResult("done", "", good_rl(), 0.5, "pr"),
+            SessionResult("failed", "exit 1", good_rl(), 0.1, ""),
+        ],
+        on_run=opens_pr(gh, pr()),
+    )
+    night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
+    assert ("comment", (REPO, 7, "[bau:ci-fix] 1/3")) in gh.calls
+    assert not any(c[0] == "mark_ready" for c in gh.calls)
+
+
+def test_too_big_fix_restores_the_true_previous_state(cfg, tmp_path):
+    plane = FakePlane(
+        {"HOME": [item(state="In progress")]},
+        comments={"HOME-42": [Comment("c", "bau@nakomis.com", "", "[bau:picked-up from=Ready] x")]},
+    )
+    gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "red"})
+    runner = FakeRunner(
+        [
+            SessionResult("done", "", good_rl(), 0.5, "pr"),
+            SessionResult("too_big", "schema", good_rl(), 0.1, ""),
+        ],
+        on_run=opens_pr(gh, pr()),
+    )
+    repos = FakeRepos(tmp_path)
+    night(cfg, plane, gh, runner, repos).run()
+    states = [c[1][1] for c in plane.calls if c[0] == "set_state"]
+    assert states == ["In progress", "Ready"]
+    assert ("close_pr", (REPO, 7)) in gh.calls
+    assert ("delete_checkout", "home-42-rotate-logs") in repos.calls
+
+
+def test_draft_pr_with_green_ci_and_no_feedback_is_marked_ready_without_a_session(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-40", draft=True)]}, ci={"abc": "green"})
+    runner = FakeRunner([])
+    night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
+    assert runner.briefs == []
+    assert ("mark_ready", ("PR_7",)) in gh.calls
+    assert ("comment", ("HOME-40", "[bau] PR #7 CI is now green; marked ready for review.")) in plane.calls
+
+
+def test_non_draft_pr_with_green_ci_is_left_alone(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-40", draft=False)]}, ci={"abc": "green"})
+    night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path)).run()
+    assert not any(c[0] == "mark_ready" for c in gh.calls)
+
+
+def test_feedback_session_then_green_ci_marks_ready(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    gh = FakeGitHub(
+        open_prs={REPO: [pr(7, "HOME-40", draft=True)]},
+        threads={7: [Thread("T1", False, [ThreadComment("nakomis", "rename", "t")])]},
+        ci={"abc": ["red", "pending", "green"]},
+    )
+    night(
+        cfg, plane, gh, FakeRunner([SessionResult("done", "", good_rl(), 0.1, "x")]), FakeRepos(tmp_path)
+    ).run()
+    assert ("mark_ready", ("PR_7",)) in gh.calls
+
+
+def test_repo_override_outside_projects_is_declined_before_any_github_call(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(desc="repo: nakomis/x\ndo it")]})
+    gh = FakeGitHub(open_prs={REPO: []})
+    report = night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path)).run()
+    assert report.declined[0]["reason"] == "repo override nakomis/x is not in projects.yaml"
+    assert gh.calls == []
+    assert any(
+        c[0] == "comment" and "repo override nakomis/x is not in projects.yaml" in c[1][1]
+        for c in plane.calls
+    )
+
+
+def test_merge_comment_carries_short_commit(cfg, tmp_path):
+    merged = PR(
+        REPO,
+        5,
+        "n",
+        "fix (HOME-40)",
+        "u",
+        "home-40-x",
+        "m",
+        False,
+        "t",
+        "2026-10-14T12:00:00Z",
+        "",
+        "clean",
+        merge_commit_sha="deadbeefcafe",
+    )
+    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    night(
+        cfg, plane, FakeGitHub(open_prs={}, merged={REPO: [merged]}), FakeRunner([]), FakeRepos(tmp_path)
+    ).run()
+    assert (
+        "comment",
+        ("HOME-40", "[bau] PR #5 merged at 2026-10-14T12:00:00Z as deadbee; moved to Ready for test."),
+    ) in plane.calls

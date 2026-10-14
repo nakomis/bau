@@ -65,6 +65,7 @@ class PR:
     changed_files: int = 0
     additions: int = 0
     deletions: int = 0
+    merge_commit_sha: str | None = None
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,7 @@ class GitHubClient:
             d.get("changed_files", 0),
             d.get("additions", 0),
             d.get("deletions", 0),
+            d.get("merge_commit_sha"),
         )
 
     def _get(self, path: str, **params):
