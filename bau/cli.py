@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import signal
 import sys
 import time
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from bau.abandon import RUN_IN_PROGRESS, AlreadyAbandoned, RunInProgress, abandon
 from bau.checkout import Repos
 from bau.config import Config, load_config, load_projects, paused_reader
 from bau.github import GitHubApp, GitHubClient
+from bau.lock import run_lock
 from bau.plane import PlaneClient
 from bau.runloop import TOKEN_REFRESH_MARGIN, Night, NightReport
 from bau.secrets import read_secret
@@ -48,6 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dry-run", action="store_true")
     sub.add_parser("snapshot", help="refresh state.json without starting sessions", parents=[common])
     sub.add_parser("probe", help="print the current usage windows", parents=[common])
+    ab = sub.add_parser("abandon", help="abandon a picked-up item", parents=[common])
+    ab.add_argument("ref")
+    ab.add_argument("--note", default="")
     return p
 
 
@@ -150,22 +153,6 @@ def _last_run(raw: dict | None) -> LastRun | None:
 def _on_sigterm(signum, frame):
     # SystemExit unwinds through the session runner's cleanup, which kills the container.
     raise SystemExit(143)
-
-
-@contextmanager
-def run_lock(path: Path) -> Iterator[bool]:
-    """Exclusive, non-blocking: yields False when another run holds the lock."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as f:
-        try:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            yield False
-            return
-        try:
-            yield True
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -293,7 +280,32 @@ def _dispatch(args: argparse.Namespace) -> int:
             ),
         )
         return 0
+    if args.command == "abandon":
+        return _abandon(args, cfg, wired)
     return 2
+
+
+def _abandon(args: argparse.Namespace, cfg: Config, wired) -> int:
+    projects, plane, _, factory, repos, _ = wired
+    try:
+        r = abandon(
+            args.ref,
+            plane=plane,
+            github_factory=factory,
+            repos=repos,
+            projects=projects,
+            worker_login=cfg.identities.worker_github_login,
+            note=args.note,
+            lock_path=cfg.paths.logs.parent / "run.lock",
+        )
+    except RunInProgress:
+        print(RUN_IN_PROGRESS)
+        return 1
+    except AlreadyAbandoned as e:
+        print(e)
+        return 1
+    print(f"{r.ref}: PR {r.pr}, restored to {r.restored_state}")
+    return 0
 
 
 if __name__ == "__main__":
