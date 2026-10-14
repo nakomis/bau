@@ -11,7 +11,7 @@ if [ "$(pwd)" != "$SRC" ]; then
   echo "Expected to run from $SRC (clone the repo there)"; exit 1
 fi
 uv sync --frozen
-docker build -t bau-agent:latest container/
+docker build --load -t bau-agent:latest container/
 docker compose -f container/compose.yml up -d --build
 if [ -f web/package.json ]; then
   (cd web && pnpm install --frozen-lockfile && pnpm build)
