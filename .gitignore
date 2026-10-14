@@ -230,9 +230,6 @@ lcov.info
 # uv
 .venv/
 
-# Terraform (plan 3)
-terraform/.terraform/
-terraform/*.tfstate*
 
 # SDD workspace
 .superpowers/
