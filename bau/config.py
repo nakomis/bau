@@ -25,12 +25,14 @@ class Limits:
     ci_fix_sessions_per_pr: int
     too_big_files: int
     too_big_lines: int
+    sweep_session_wall_clock_minutes: int
 
 
 @dataclass(frozen=True)
 class Schedule:
     no_new_sessions_after: time
     timezone: str
+    sweep_no_new_sessions_after: time
 
 
 @dataclass(frozen=True)
@@ -123,7 +125,11 @@ def load_config(path: Path) -> Config:
     raw = yaml.safe_load(Path(path).read_text())
     return Config(
         paused=raw["paused"] is True,
-        schedule=Schedule(_time(raw["schedule"]["no_new_sessions_after"]), raw["schedule"]["timezone"]),
+        schedule=Schedule(
+            _time(raw["schedule"]["no_new_sessions_after"]),
+            raw["schedule"]["timezone"],
+            _time(raw["schedule"]["sweep_no_new_sessions_after"]),
+        ),
         limits=Limits(**raw["limits"]),
         models=Models(**raw["models"]),
         identities=Identities(**raw["identities"]),

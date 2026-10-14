@@ -70,8 +70,29 @@ A dry run prints a `preflight:` line, then one line per planned action (`feedbac
 
 - `com.nakomis.bau-run`: 01:00 every night, runs `bau run`.
 - `com.nakomis.bau-snapshot`: hourly from 07:30 to 23:30, runs `bau snapshot`.
+- `com.nakomis.bau-sweep`: 00:15 every Sunday, runs `bau sweep`, which does nothing unless it is the first Sunday of the month.
 
 No new sessions start after the `no_new_sessions_after` cut-off in `config/bau.yaml` (05:00, Europe/London).
+
+## Sweep
+
+Once a month (00:15 on the first Sunday) `bau sweep` reads the open items of every project in `projects.yaml` and asks an agent which are candidates for BAU: small and well specified, stale, duplicates, or already done by a merged BAU PR. The result is a summary item named "Sweep <Month YYYY>" in the BAU project, plus a comment on each candidate saying why it was suggested. A second sweep in the same month adds to that item instead of creating another.
+
+The sweep only proposes. It never adds the `BAU` label, never changes an item's state and never writes `state.json`; Martin labels the candidates he agrees with.
+
+Label an item `not-bau` to stop the sweep suggesting it. The sweep also skips its own "Sweep <Month YYYY>" summaries, and it quotes the agent's reasons as `the sweep agent said: "..."` with brackets and link schemes stripped.
+
+The sweep has its own limits in `config/bau.yaml`: `limits.sweep_session_wall_clock_minutes` (15) caps each session, and `schedule.sweep_no_new_sessions_after` (00:50, Europe/London) stops it starting sessions so a slow sweep cannot take the night's place. A sweep stopped that way ends with stop reason `sweep-cutoff` and exits 0; because the cut-off is a time of day, a `--force` sweep run later in the day will start no sessions.
+
+Try it any day without writing anything:
+
+```bash
+cd ~/bau/src
+.venv/bin/bau sweep --force --dry-run   # lists the projects it would review, starts no sessions
+.venv/bin/bau sweep --force             # a real sweep, outside the first Sunday
+```
+
+It shares `~/bau/run.lock` with the nightly run and `bau abandon`. The sweep waits up to 30 minutes for the lock and then gives up quietly; `bau run` waits up to an hour and, if it still cannot start, records `stop_reason: locked` in `state.json` and exits 0. Log: `~/bau/logs/bau-sweep.log`.
 
 ## Pause
 

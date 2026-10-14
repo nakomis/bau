@@ -26,6 +26,7 @@ class Item:
     priority: str | None
     created_at: str
     assignees: list[str] = field(default_factory=list)
+    updated_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -136,10 +137,14 @@ class PlaneClient:
                 raise ValueError(f"No Plane project {identifier}")
             p = projects[identifier]
             pid = p["id"]
+            states = self._get_all(f"/projects/{pid}/states/")
             self._meta[identifier] = {
                 "project": p,
-                "states": {s["name"].lower(): s["id"] for s in self._get_all(f"/projects/{pid}/states/")},
-                "state_names": {s["id"]: s["name"] for s in self._get_all(f"/projects/{pid}/states/")},
+                "states": {s["name"].lower(): s["id"] for s in states},
+                "state_names": {s["id"]: s["name"] for s in states},
+                "state_groups": {s["id"]: s.get("group", "") for s in states},
+                "default_state": next((s["id"] for s in states if s.get("default")), None)
+                or (states[0]["id"] if states else None),
                 "labels": {lbl["name"]: lbl["id"] for lbl in self._get_all(f"/projects/{pid}/labels/")},
                 "members": {m["id"]: m.get("email", "") for m in self._get_all(f"/projects/{pid}/members/")},
             }
@@ -163,6 +168,7 @@ class PlaneClient:
             priority=raw.get("priority"),
             created_at=raw.get("created_at", ""),
             assignees=[meta["members"].get(a, a) for a in raw.get("assignees", [])],
+            updated_at=raw.get("updated_at", "") or "",
         )
 
     # ── reads ────────────────────────────────────────────────────────────
@@ -171,6 +177,16 @@ class PlaneClient:
         rows = self._get_all(f"/projects/{meta['project']['id']}/work-items/")
         items = [self._format(identifier, r) for r in rows]
         return [i for i in items if label in i.labels]
+
+    def list_open_items(self, identifier: str) -> list[Item]:
+        """Every item whose state is not in a completed or cancelled group."""
+        meta = self._project(identifier)
+        rows = self._get_all(f"/projects/{meta['project']['id']}/work-items/")
+        return [
+            self._format(identifier, r)
+            for r in rows
+            if meta["state_groups"].get(r.get("state"), "") not in ("completed", "cancelled")
+        ]
 
     def get_item(self, ref: str) -> Item:
         meta, raw = self._item(ref)
@@ -234,6 +250,21 @@ class PlaneClient:
             json={"comment_html": markdown_to_html(markdown)},
         )
         return c["id"]
+
+    def create_item(self, identifier: str, name: str, description_md: str, state: str | None = None) -> str:
+        """Create a work item and return its ref. With no state, the project's default state is used."""
+        meta = self._project(identifier)
+        if state is None:
+            state_id = meta["default_state"]
+        elif state.lower() in meta["states"]:
+            state_id = meta["states"][state.lower()]
+        else:
+            raise ValueError(f"Unknown state {state!r}; valid: {sorted(set(meta['state_names'].values()))}")
+        body = {"name": name, "description_html": markdown_to_html(description_md)}
+        if state_id:
+            body["state"] = state_id
+        raw = self._request("POST", f"/projects/{meta['project']['id']}/work-items/", json=body)
+        return f"{identifier}-{raw['sequence_id']}"
 
     def link(self, ref: str, url: str, title: str) -> None:
         meta, raw = self._item(ref)

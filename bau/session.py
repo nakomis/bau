@@ -86,11 +86,17 @@ def docker_command(
 
 
 class SessionRunner:
-    def __init__(self, cfg: Config, docker: str = "docker", monotonic=time.monotonic):
+    def __init__(
+        self,
+        cfg: Config,
+        docker: str = "docker",
+        monotonic=time.monotonic,
+        wall_clock_minutes: int | None = None,
+    ):
         self.cfg = cfg
         self.docker = docker
         self.monotonic = monotonic
-        self.wall_clock_seconds = cfg.limits.session_wall_clock_minutes * 60
+        self.wall_clock_seconds = (wall_clock_minutes or cfg.limits.session_wall_clock_minutes) * 60
 
     def _kill(self, name: str) -> None:
         try:

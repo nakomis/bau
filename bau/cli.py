@@ -6,7 +6,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import fields
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -35,10 +35,24 @@ from bau.snapshot import (
     read_snapshot,
     write_snapshot,
 )
+from bau.sweep import Sweep, first_sunday
 
 DEFAULT_CONFIG = Path("/Users/nakomis/bau/src/config")
 # Stop reasons that make up a normal night; anything else (or an exception) exits non-zero.
-NORMAL_STOP_REASONS = frozenset({"ok", "cutoff", "pace", "ceiling", "paused", "five-hour"})
+NORMAL_STOP_REASONS = frozenset(
+    {"ok", "cutoff", "pace", "ceiling", "paused", "five-hour", "locked", "sweep-cutoff"}
+)
+# How long each job waits for the shared run lock before giving up (seconds).
+RUN_LOCK_WAIT = 3600
+SWEEP_LOCK_WAIT = 1800
+
+
+def today() -> date:
+    return date.today()
+
+
+def sweep_due(force: bool) -> bool:
+    return force or first_sunday(today())
 
 
 def exit_code(stop_reason: str) -> int:
@@ -58,6 +72,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("probe", help="print the current usage windows", parents=[common])
     sv = sub.add_parser("serve", help="the dashboard API and static site", parents=[common])
     sv.add_argument("--port", type=int, default=8800)
+    sw = sub.add_parser("sweep", help="monthly candidate sweep (first Sunday)", parents=[common])
+    sw.add_argument("--dry-run", action="store_true")
+    sw.add_argument("--force", action="store_true", help="run even when it is not the first Sunday")
     ab = sub.add_parser("abandon", help="abandon a picked-up item", parents=[common])
     ab.add_argument("ref")
     ab.add_argument("--note", default="")
@@ -259,13 +276,56 @@ def _run(args: argparse.Namespace, cfg: Config) -> int:
     return exit_code(report.stop_reason)
 
 
+def _locked_out(cfg: Config, args: argparse.Namespace) -> int:
+    print("bau run: another BAU operation held the lock for an hour; giving up")
+    if args.dry_run:
+        return 0
+    wired = wire(cfg, args.config)
+    clock = wired[5]
+    paused = paused_reader(args.config / "bau.yaml", cfg.paused)
+    # failed=True keeps the last known rows and touches no service: nothing ran tonight.
+    _write_run_snapshot(cfg, wired, clock(), NightReport(), "locked", paused(), failed=True)
+    return 0
+
+
+def _sweep(args: argparse.Namespace, cfg: Config) -> int:
+    with run_lock(cfg.paths.logs.parent / "run.lock", SWEEP_LOCK_WAIT) as held:
+        if not held:
+            print("bau sweep: another BAU operation held the lock for 30 minutes; giving up")
+            return 0
+        projects, plane, _, _, _, clock = wire(cfg, args.config)
+        report = Sweep(
+            cfg,
+            projects,
+            plane,
+            # the sweep's own, shorter session wall clock; the night's runner is untouched
+            SessionRunner(cfg, wall_clock_minutes=cfg.limits.sweep_session_wall_clock_minutes),
+            clock,
+            paused=paused_reader(args.config / "bau.yaml", cfg.paused),
+            oauth_token=read_secret(cfg.claude.oauth_token),
+            dry_run=args.dry_run,
+        ).run()
+    for line in report.planned:
+        print(line)
+    print(
+        f"sweep: {report.projects} project(s), {report.sessions} session(s), "
+        f"{report.candidates} candidate(s) commented, summary {report.summary_ref or 'none'}, "
+        f"stop reason {report.stop_reason}"
+    )
+    return exit_code(report.stop_reason)
+
+
 def _dispatch(args: argparse.Namespace) -> int:
+    if args.command == "sweep" and not sweep_due(args.force):
+        print("not the first Sunday; nothing to do")
+        return 0
     cfg = load_config(args.config / "bau.yaml")
+    if args.command == "sweep":
+        return _sweep(args, cfg)
     if args.command == "run":
-        with run_lock(cfg.paths.logs.parent / "run.lock") as held:
+        with run_lock(cfg.paths.logs.parent / "run.lock", RUN_LOCK_WAIT) as held:
             if not held:
-                print("another bau run is in progress")
-                return 0
+                return _locked_out(cfg, args)
             return _run(args, cfg)
     wired = wire(cfg, args.config)
     projects, plane, app, factory, repos, clock = wired

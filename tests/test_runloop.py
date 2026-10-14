@@ -4,9 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import pytest
-
-from bau.config import Models, ProjectConfig, load_config
+from bau.config import Models, ProjectConfig
 from bau.github import PR, Thread, ThreadComment, Token
 from bau.plane import Comment, Item
 from bau.runloop import Night, branch_name, model_for, previous_state, repo_for
@@ -46,15 +44,6 @@ def pr(number=7, ref="HOME-42", sha="abc", draft=True, mergeable="clean"):
 def good_rl():
     now = datetime(2026, 10, 15, 2, tzinfo=LONDON).timestamp()
     return RateLimit("allowed", Window(0.1, int(now + 3600)), Window(0.1, int(now + 300000)))
-
-
-@pytest.fixture
-def cfg(tmp_path: Path):
-    from tests.test_config import MINIMAL
-
-    p = tmp_path / "bau.yaml"
-    p.write_text(MINIMAL.replace("/Users/nakomis/bau", str(tmp_path)))
-    return load_config(p)
 
 
 class StubApp:
@@ -413,7 +402,7 @@ def test_probe_uses_subscription_login_and_never_bare(cfg, tmp_path, monkeypatch
         seen["cmd"], seen["env"] = cmd, kwargs["env"]
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("bau.runloop.subprocess.run", fake_run)
+    monkeypatch.setattr("bau.probe.subprocess.run", fake_run)
     n = night(cfg, FakePlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path))
     assert Night.probe(n) is None
     assert "--disable-slash-commands" in seen["cmd"] and "--bare" not in seen["cmd"]

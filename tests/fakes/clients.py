@@ -18,6 +18,17 @@ class FakePlane:
     def list_items(self, identifier, label):
         return [i for i in self.items.get(identifier, []) if label in i.labels]
 
+    def list_open_items(self, identifier):
+        return [i for i in self.items.get(identifier, []) if i.state not in ("Done", "Cancelled")]
+
+    def create_item(self, identifier, name, description_md, state=None):
+        self.calls.append(("create_item", (identifier, name, description_md, state)))
+        ref = f"{identifier}-99"
+        self.items.setdefault(identifier, []).append(
+            Item(ref, ref.lower(), "p", name, description_md, "New", [], None, "")
+        )
+        return ref
+
     def get_item(self, ref):
         found = next((i for items in self.items.values() for i in items if i.ref == ref), None)
         if found is None:

@@ -7,7 +7,11 @@ import bau.plane as plane
 from bau.plane import Comment, Item, PlaneClient, html_to_text, markdown_to_html
 
 PROJECT = {"id": "p1", "identifier": "HOME", "name": "Home"}
-STATES = [{"id": "s-new", "name": "New"}, {"id": "s-prog", "name": "In progress"}]
+STATES = [
+    {"id": "s-new", "name": "New", "group": "unstarted", "default": True},
+    {"id": "s-prog", "name": "In progress", "group": "started"},
+    {"id": "s-done", "name": "Done", "group": "completed"},
+]
 LABELS = [{"id": "l-bau", "name": "BAU"}, {"id": "l-blocked", "name": "blocked"}]
 MEMBERS = [{"id": "u-m", "email": "martin@nakomis.com"}, {"id": "u-b", "email": "bau@nakomis.com"}]
 ITEM = {
@@ -49,6 +53,8 @@ def routes(request: httpx.Request, calls: list):
     }
     if request.method == "GET":
         return httpx.Response(200, json=table[path])
+    if request.method == "POST" and path.endswith("/work-items/"):
+        return httpx.Response(201, json={"id": "new", "sequence_id": 99})
     if request.method == "POST" and path.endswith("/comments/"):
         return httpx.Response(201, json={"id": "c9"})
     return httpx.Response(200, json=ITEM)
@@ -182,3 +188,36 @@ def test_html_lists_and_headings_become_line_breaks():
 def test_markdown_round_trips_through_plane_html():
     text = "[bau:picked-up from=Ready] Working on branch `home-42-x` in **nakomis/home-infra**."
     assert html_to_text(markdown_to_html(text)) == text
+
+
+def test_list_open_items_drops_completed_and_cancelled_states():
+    done = {**ITEM, "id": "i2", "sequence_id": 43, "state": "s-done", "updated_at": "2026-10-05T00:00:00Z"}
+    open_ = {**ITEM, "updated_at": "2026-10-04T00:00:00Z"}
+
+    def handler(request):
+        if request.method == "GET" and request.url.path.endswith("/projects/p1/work-items/"):
+            return httpx.Response(200, json={"results": [open_, done], "next_page_results": False})
+        return routes(request, [])
+
+    items = make(handler).list_open_items("HOME")
+    assert [(i.ref, i.updated_at) for i in items] == [("HOME-42", "2026-10-04T00:00:00Z")]
+
+
+def test_create_item_uses_default_state_when_none_and_returns_ref():
+    calls = []
+    ref = make(lambda r: routes(r, calls)).create_item("HOME", "Sweep", "Hello\n\nWorld")
+    assert ref == "HOME-99"
+    method, path, content = calls[-1]
+    body = json.loads(content)
+    assert (method, path) == ("POST", "/api/v1/workspaces/nakomis/projects/p1/work-items/")
+    assert body["state"] == "s-new" and body["name"] == "Sweep"
+    assert body["description_html"] == "<p>Hello</p><p>World</p>"
+
+
+def test_create_item_named_state_and_unknown_state():
+    calls = []
+    c = make(lambda r: routes(r, calls))
+    c.create_item("HOME", "x", "y", state="In progress")
+    assert json.loads(calls[-1][2])["state"] == "s-prog"
+    with pytest.raises(ValueError, match="Unknown state"):
+        c.create_item("HOME", "x", "y", state="Nope")
