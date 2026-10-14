@@ -41,7 +41,7 @@ def _returning(stdout):
     return fake_run
 
 
-PEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----"  # secret-check:allow (fake fixture)
+PEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----"  # secret-check:allow
 
 
 def test_multi_line_value_returned_as_hex_is_decoded():
