@@ -1,5 +1,8 @@
-import { pct } from '../lib/format';
+import { pct, relativeTime } from '../lib/format';
 import type { Pace, LastRun as Run } from '../types';
+
+const failed = (reason: string) =>
+  reason.startsWith('failed') || reason.startsWith('preflight') || reason === 'rejected';
 
 export default function LastRun({
   run,
@@ -16,10 +19,26 @@ export default function LastRun({
         <p className="font-semibold text-amber-600 dark:text-amber-400">Worker is paused.</p>
       )}
       {run ? (
-        <p>
-          {run.started} to {run.ended}: {run.sessions} sessions, {run.prs_opened} PRs opened,{' '}
-          {run.feedback_handled} feedback handled, stopped: {run.stop_reason}.
-        </p>
+        <>
+          {failed(run.stop_reason) && (
+            <p>
+              <span className="rounded bg-red-600 px-2 py-0.5 font-semibold text-white">
+                Last run failed
+              </span>
+            </p>
+          )}
+          {run.telemetry === 'missing' && (
+            <p className="font-semibold text-amber-600 dark:text-amber-400">
+              Telemetry missing: fail-closed, at most two sessions
+            </p>
+          )}
+          <p>
+            <time title={run.started}>{relativeTime(run.started)}</time> to{' '}
+            <time title={run.ended}>{relativeTime(run.ended)}</time>: {run.sessions} sessions,{' '}
+            {run.prs_opened} PRs opened, {run.feedback_handled} feedback handled, stopped:{' '}
+            {run.stop_reason}.
+          </p>
+        </>
       ) : (
         <p>No run recorded yet.</p>
       )}

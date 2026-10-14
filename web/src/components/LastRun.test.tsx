@@ -48,4 +48,38 @@ describe('LastRun', () => {
     expect(screen.getByText(/no run recorded yet/i)).toBeInTheDocument();
     expect(screen.getByText(/usage figures unavailable/i)).toBeInTheDocument();
   });
+  const base = {
+    started: '2026-10-15T01:00:00Z',
+    ended: '2026-10-15T02:00:00Z',
+    sessions: 1,
+    prs_opened: 0,
+    feedback_handled: 0,
+    stop_reason: 'cutoff',
+    telemetry: 'ok',
+  };
+  it('warns when telemetry is missing', () => {
+    render(<LastRun run={{ ...base, telemetry: 'missing' }} pace={null} paused={false} />);
+    expect(
+      screen.getByText('Telemetry missing: fail-closed, at most two sessions'),
+    ).toBeInTheDocument();
+  });
+  it('does not warn about telemetry when it is present', () => {
+    render(<LastRun run={base} pace={null} paused={false} />);
+    expect(screen.queryByText(/fail-closed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Last run failed')).not.toBeInTheDocument();
+  });
+  it.each(['failed: RuntimeError: boom', 'preflight: docker down', 'rejected'])(
+    'shows a failure badge for stop_reason %s',
+    (stop_reason) => {
+      render(<LastRun run={{ ...base, stop_reason }} pace={null} paused={false} />);
+      expect(screen.getByText('Last run failed')).toBeInTheDocument();
+    },
+  );
+  it('renders relative times with the absolute value in the title', () => {
+    const iso = new Date(Date.now() - 3 * 3_600_000).toISOString();
+    render(<LastRun run={{ ...base, started: iso, ended: iso }} pace={null} paused={false} />);
+    const els = screen.getAllByText('3 hours ago');
+    expect(els).toHaveLength(2);
+    expect(els[0]).toHaveAttribute('title', iso);
+  });
 });
