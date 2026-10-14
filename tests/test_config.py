@@ -1,0 +1,60 @@
+from datetime import time
+from pathlib import Path
+
+import pytest
+
+from bau.config import Limits, ProjectConfig, load_config, load_projects
+
+MINIMAL = """
+paused: false
+schedule: {no_new_sessions_after: "05:00", timezone: Europe/London}
+limits: {open_pr_ceiling: 50, pace_margin: 0.10, five_hour_kill: 0.80,
+         session_wall_clock_minutes: 60, session_budget_usd: 5.0,
+         fail_closed_sessions: 2, ci_fix_sessions_per_pr: 3,
+         too_big_files: 15, too_big_lines: 400}
+models: {default: claude-opus-5-5, fable: claude-fable-5-1, fable_label: BAU-fable}
+identities: {github_login: nakomis, owner_plane_email: martin@nakomis.com,
+             worker_plane_email: bau@nakomis.com, worker_github_login: "nakomis-bau[bot]"}
+github_app: {app_id: 12345, installation_id: 67890,
+             private_key: {service: bau, account: github-app-key}}
+plane: {url: https://plane.home.nakomis.com, workspace: nakomis,
+        api_key: {service: bau, account: plane-api-key},
+        client_cert: ~/.config/bau/cere.crt.pem, client_key: ~/.config/bau/cere.key.pem}
+claude: {oauth_token: {service: bau, account: claude-oauth-token}}
+paths: {repos: /Users/nakomis/bau/repos, work: /Users/nakomis/bau/work,
+        logs: /Users/nakomis/bau/logs, snapshot: /Users/nakomis/bau/state.json}
+container: {image: bau-agent:latest, network: bau-net, proxy: http://bau-egress:8888}
+"""
+
+
+def test_loads_every_section(tmp_path: Path):
+    p = tmp_path / "bau.yaml"
+    p.write_text(MINIMAL)
+    cfg = load_config(p)
+    assert cfg.paused is False
+    assert cfg.schedule.no_new_sessions_after == time(5, 0)
+    assert cfg.limits == Limits(50, 0.10, 0.80, 60, 5.0, 2, 3, 15, 400)
+    assert cfg.models.fable_label == "BAU-fable"
+    assert cfg.github_app.private_key.account == "github-app-key"
+    assert cfg.plane.client_cert == Path("~/.config/bau/cere.crt.pem").expanduser()
+    assert cfg.paths.snapshot == Path("/Users/nakomis/bau/state.json")
+    assert cfg.container.proxy == "http://bau-egress:8888"
+
+
+def test_missing_section_is_an_error(tmp_path: Path):
+    p = tmp_path / "bau.yaml"
+    p.write_text("paused: false\n")
+    with pytest.raises(KeyError):
+        load_config(p)
+
+
+def test_projects_map_identifier_to_repo(tmp_path: Path):
+    p = tmp_path / "projects.yaml"
+    p.write_text(
+        "projects:\n"
+        "  HOME: {repo: nakomis/home-infra, deploys: true, deploy_action: 'Run the playbook'}\n"
+        "  BAU: {repo: nakomis/bau, deploys: false}\n"
+    )
+    projects = load_projects(p)
+    assert projects["HOME"] == ProjectConfig("HOME", "nakomis/home-infra", True, "Run the playbook")
+    assert projects["BAU"].deploy_action == ""
