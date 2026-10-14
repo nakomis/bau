@@ -47,7 +47,7 @@ cd ~/bau/src
 ./install.sh
 ```
 
-`install.sh` creates `~/bau/{repos,work,logs}`, runs `uv sync --frozen`, builds the `bau-agent:latest` image from `container/Dockerfile`, starts the egress proxy with `docker compose -f container/compose.yml up -d`, and installs and bootstraps the launchd jobs.
+`install.sh` creates `~/bau/{repos,work,logs}`, runs `uv sync --frozen`, builds the `bau-agent:latest` image from `container/Dockerfile`, builds and starts the egress proxy with `docker compose -f container/compose.yml up -d --build`, and installs and bootstraps the launchd jobs.
 
 ## Dry run
 
@@ -74,18 +74,20 @@ No new sessions start after the `no_new_sessions_after` cut-off in `config/bau.y
 
 Set `paused: true` in `config/bau.yaml` to stop new sessions. Policy refuses to start work while it is set. Set it back to `false` to resume.
 
-The run reads `bau.yaml` once, when `bau run` starts. A change therefore takes effect at the next run, not in a run already in progress. For an immediate stop, see "Stop a run now".
+A running `bau run` re-reads the `paused` flag before every session, so a pause takes effect before the next session starts; a session already in progress runs to its end. Only a literal `paused: true` pauses (not `yes`, `"true"` or `1`). If `bau.yaml` fails to parse mid-run, the run keeps the last value it read. Merged PRs are still closed out and green drafts still marked ready while paused, since neither starts a session. For an immediate stop, see "Stop a run now".
 
 ## Stop a run now
 
 ```bash
 launchctl bootout gui/$(id -u)/com.nakomis.bau-run
 export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock   # an interactive shell may not have this
-ids=$(docker ps --format '{{.Names}}' | grep '^bau-' | grep -v '^bau-egress$')
+ids=$(docker ps -q --filter label=bau.session=1)
 [ -n "$ids" ] && echo "$ids" | xargs docker kill
 ```
 
-`bootout` stops the `bau` process but not a running agent container, so the second line kills any containers named `bau-<ref>`. The egress proxy (`bau-egress`) is left running.
+`bootout` sends `bau` SIGTERM. `bau` turns that into a clean exit: it kills the running agent container, writes `state.json` with `stop_reason: failed: SystemExit: 143`, and exits. The last two lines are a backstop for when `bau` could not clean up (for example after a SIGKILL): they kill any container labelled `bau.session=1`, which every agent session carries. The egress proxy (`bau-egress`) has no such label and is left running.
+
+Only one `bau run` runs at a time: a second one finds `~/bau/run.lock` held, prints `another bau run is in progress` and exits 0.
 
 The job stays unloaded until `./install.sh` or `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nakomis.bau-run.plist` is run.
 
@@ -106,10 +108,9 @@ Do not upgrade while a run is active, roughly 01:00 to 05:30: `install.sh` reloa
 cd ~/bau/src
 git pull
 ./install.sh
-docker compose -f container/compose.yml up -d --build
 ```
 
-`install.sh` does not rebuild the egress proxy when its image already exists, so the final `--build` line is needed after a change to `container/`.
+`install.sh` rebuilds the agent image and the egress proxy (`up -d --build`), so a change to `container/` is picked up.
 
 ## Uninstall
 

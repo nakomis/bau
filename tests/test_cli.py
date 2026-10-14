@@ -146,3 +146,97 @@ def test_client_factory_caches_and_refreshes_near_expiry():
     assert f("o/r") == "t1"
     assert f("o/r") == "t2"  # t1 expires in 3 min: already inside the margin, so re-minted
     assert len(minted) == 3
+
+
+class StubNight:
+    """Stands in for runloop.Night inside cli._dispatch."""
+
+    instances: list = []
+    outcome: BaseException | None = None
+
+    def __init__(self, *args, **kwargs):
+        from bau.runloop import NightReport
+
+        self.kwargs = kwargs
+        self.report = NightReport(sessions=1)
+        StubNight.instances.append(self)
+
+    def run(self):
+        if StubNight.outcome is not None:
+            raise StubNight.outcome
+        return self.report
+
+
+@pytest.fixture
+def run_world(tmp_path, monkeypatch):
+    from bau import cli
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "bau.yaml").write_text("paused: false\n")
+    cfg = SimpleNamespace(
+        paused=False,
+        paths=SimpleNamespace(snapshot=tmp_path / "state.json", logs=tmp_path / "logs"),
+        claude=SimpleNamespace(oauth_token=None),
+    )
+    StubNight.instances, StubNight.outcome = [], None
+    monkeypatch.setattr(cli, "load_config", lambda p: cfg)
+    monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW))
+    monkeypatch.setattr(cli, "read_secret", lambda ref: "oat")
+    monkeypatch.setattr(cli, "SessionRunner", lambda c: None)
+    monkeypatch.setattr(cli, "snapshot_rows", lambda *a, **k: ([], []))
+    monkeypatch.setattr(cli, "Night", StubNight)
+    return SimpleNamespace(cli=cli, cfg=cfg, config_dir=config_dir, snapshot=tmp_path / "state.json")
+
+
+def test_a_crashing_run_writes_a_failed_snapshot_and_exits_one(run_world):
+    from bau.snapshot import read_snapshot
+
+    StubNight.outcome = RuntimeError("x" * 300)
+    assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 1
+    last = read_snapshot(run_world.snapshot)["last_run"]
+    assert last["stop_reason"] == ("failed: RuntimeError: " + "x" * 300)[:200]
+    assert last["sessions"] == 1
+
+
+def test_sigterm_becomes_systemexit_143_and_still_writes_the_snapshot(run_world, monkeypatch):
+    import signal
+
+    from bau.snapshot import read_snapshot
+
+    seen = {}
+
+    def run_and_capture(self):
+        seen["handler"] = signal.getsignal(signal.SIGTERM)
+        raise SystemExit(143)
+
+    monkeypatch.setattr(StubNight, "run", run_and_capture)
+    with pytest.raises(SystemExit) as info:
+        run_world.cli.main(["run", "--config", str(run_world.config_dir)])
+    assert info.value.code == 143
+    with pytest.raises(SystemExit) as again:
+        seen["handler"](signal.SIGTERM, None)
+    assert again.value.code == 143
+    assert read_snapshot(run_world.snapshot)["last_run"]["stop_reason"] == "failed: SystemExit: 143"
+    assert signal.getsignal(signal.SIGTERM) is not seen["handler"]
+
+
+def test_the_run_rereads_the_paused_flag(run_world):
+    assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
+    paused = StubNight.instances[0].kwargs["paused"]
+    assert paused() is False
+    (run_world.config_dir / "bau.yaml").write_text("paused: true\n")
+    assert paused() is True
+
+
+def test_a_second_run_exits_quietly_while_one_holds_the_lock(run_world, capsys):
+    import fcntl
+
+    lock = run_world.cfg.paths.logs.parent / "run.lock"
+    with open(lock, "a") as held:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
+    assert "another bau run is in progress" in capsys.readouterr().out
+    assert StubNight.instances == []
+    assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
+    assert len(StubNight.instances) == 1
