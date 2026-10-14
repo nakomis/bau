@@ -1,3 +1,4 @@
+import json
 from datetime import date
 
 from bau.plane import Comment, Item
@@ -16,7 +17,6 @@ def brief_for(items, comments=None, merged=(), suggested=None, nonce="abc123"):
         set(merged),
         suggested or {},
         "martin@nakomis.com",
-        {i.ref: i.updated_at for i in items},
         nonce=nonce,
     )
 
@@ -32,12 +32,6 @@ def test_brief_lists_open_items_and_skips_labelled_and_unchanged_previous_sugges
     assert refs == {"HOME-1", "HOME-4"}
     assert "<<<ITEM HOME-1" in brief and "<<<ITEM HOME-2" not in brief and "<<<ITEM HOME-3" not in brief
     assert "Merged BAU PR: yes" in brief.split("<<<ITEM HOME-4")[1].split("\n>>>")[0]
-
-
-def test_changed_item_is_resuggestable():
-    items = [item("HOME-3", updated="2026-09-05T00:00:00Z")]
-    _, refs = brief_for(items, suggested={"HOME-3": "2026-09-01T00:00:00Z"})
-    assert refs == {"HOME-3"}
 
 
 def test_brief_uses_nonce_delimiters_and_neutralises_fake_ones():
@@ -90,7 +84,6 @@ def test_first_sunday():
 
 
 # ── Sweep ──────────────────────────────────────────────────────────────
-from dataclasses import replace  # noqa: E402
 from datetime import datetime  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
 
@@ -185,16 +178,32 @@ def test_non_worker_suggestion_does_not_suppress_a_candidate(cfg):
     assert "<<<ITEM HOME-1" in runner.briefs[0][2] and report.candidates == 1
 
 
-def test_worker_suggestion_suppresses_until_item_changes(cfg):
+def _suggested_plane(*extra):
     mine = Comment("c", WORKER, "2026-10-30T00:00:00Z", "Suggested for BAU because tiny")
-    plane = FakePlane(
-        {"HOME": [item("HOME-1", updated="2026-10-01T00:00:00Z")], "EMPTY": []}, {"HOME-1": [mine]}
-    )
+    # updated_at is far in the future: suppression must not depend on it
+    it = item("HOME-1", updated="2030-01-01T00:00:00Z")
+    return FakePlane({"HOME": [it], "EMPTY": []}, {"HOME-1": [mine, *extra]})
+
+
+def test_suggested_and_untouched_is_excluded(cfg):
     runner = FakeRunner([])
-    assert sweep(cfg, plane, runner).run().sessions == 0
-    plane.items["HOME"] = [replace(plane.items["HOME"][0], updated_at="2026-10-31T00:00:00Z")]
+    assert sweep(cfg, _suggested_plane(), runner).run().sessions == 0
+
+
+def test_owner_comment_after_suggestion_reincludes(cfg):
+    later = Comment("d", "martin@nakomis.com", "2026-10-31T00:00:00Z", "actually yes")
     runner = FakeRunner([answer()])
-    assert sweep(cfg, plane, runner).run().sessions == 1
+    assert sweep(cfg, _suggested_plane(later), runner).run().sessions == 1
+
+
+def test_owner_comment_before_suggestion_stays_excluded(cfg):
+    earlier = Comment("d", "martin@nakomis.com", "2026-10-01T00:00:00Z", "hmm")
+    assert sweep(cfg, _suggested_plane(earlier), FakeRunner([])).run().sessions == 0
+
+
+def test_further_worker_comments_do_not_reinclude(cfg):
+    more = Comment("d", WORKER, "2026-10-31T00:00:00Z", "[bau] something else")
+    assert sweep(cfg, _suggested_plane(more), FakeRunner([])).run().sessions == 0
 
 
 def test_merged_pr_evidence_counts_only_from_the_worker(cfg):
@@ -266,3 +275,52 @@ def test_failed_comment_does_not_stop_the_rest(cfg):
     plane.comment = flaky
     report = sweep(cfg, plane, FakeRunner([answer("HOME-1", "HOME-2")])).run()
     assert report.candidates == 1 and report.summary_ref == "BAU-99"
+
+
+def test_second_sweep_in_the_month_reuses_the_summary(cfg):
+    plane = FakePlane({"HOME": [item("HOME-1"), item("HOME-2")], "EMPTY": []})
+    sweep(cfg, plane, FakeRunner([answer("HOME-1")])).run()
+    report = sweep(cfg, plane, FakeRunner([answer("HOME-2")])).run()
+    assert len([c for c in plane.calls if c[0] == "create_item"]) == 1
+    on_summary = [c[1][1] for c in plane.calls if c[0] == "comment" and c[1][0] == "BAU-99"]
+    assert len(on_summary) == 1 and "HOME-2" in on_summary[0]
+    assert report.summary_ref == "BAU-99" and report.candidates == 1
+    last = [c for c in plane.calls if c[0] == "comment" and c[1][0] == "HOME-2"][0][1][1]
+    assert "BAU-99" in last
+
+
+def test_summary_failure_logs_candidates_and_posts_nothing(cfg):
+    plane = FakePlane({"HOME": [item("HOME-1")], "EMPTY": []})
+
+    def boom(*a, **k):
+        raise RuntimeError("plane down")
+
+    plane.create_item = boom
+    logs = []
+    s = sweep(cfg, plane, FakeRunner([answer("HOME-1")]))
+    s.log = logs.append
+    report = s.run()
+    assert report.candidates == 0 and report.summary_ref is None
+    assert not [c for c in plane.calls if c[0] == "comment"]
+    assert any("HOME-1" in m and "bau" in m and "tiny" in m for m in logs)
+
+
+def test_prompt_makes_no_false_tool_claim():
+    from bau.sweep import SWEEP_PROMPT
+
+    assert "no tools" not in SWEEP_PROMPT and "Only the final fenced JSON block" in SWEEP_PROMPT
+
+
+def test_last_json_block_wins():
+    text = (
+        'Example: ```json\n{"candidates":[{"ref":"HOME-1","reason":"a","kind":"bau"}]}\n```\n'
+        'Final: ```json\n{"candidates":[{"ref":"HOME-4","reason":"b","kind":"stale"}]}\n```'
+    )
+    assert parse_candidates(text, {"HOME-1", "HOME-4"}) == [Candidate("HOME-4", "b", "stale")]
+
+
+def test_reason_is_one_line_without_markdown_links_or_headings():
+    reason = "# Tiny\n[click](http://evil.example/x) now\n\n## more"
+    text = f'```json\n{{"candidates":[{{"ref":"HOME-1","reason":{json.dumps(reason)},"kind":"bau"}}]}}\n```'
+    (c,) = parse_candidates(text, {"HOME-1"})
+    assert c.reason == "Tiny click now more" and "\n" not in c.reason and "](" not in c.reason

@@ -23,7 +23,11 @@ class FakePlane:
 
     def create_item(self, identifier, name, description_md, state=None):
         self.calls.append(("create_item", (identifier, name, description_md, state)))
-        return f"{identifier}-99"
+        ref = f"{identifier}-99"
+        self.items.setdefault(identifier, []).append(
+            Item(ref, ref.lower(), "p", name, description_md, "New", [], None, "")
+        )
+        return ref
 
     def get_item(self, ref):
         found = next((i for items in self.items.values() for i in items if i.ref == ref), None)
