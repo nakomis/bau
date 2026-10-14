@@ -37,6 +37,12 @@ Rules:
 
 DELIMITERS = ("<<<", ">>>", "===")
 
+# The host never runs git in a checkout a session has used, so the agent brings the branch up to date.
+REBASE_FIRST = (
+    "Before anything else, run `git fetch origin main && git rebase origin/main`; resolve conflicts if any;"
+    " when you push, use `git push --force-with-lease`.\n"
+)
+
 
 def _neutralise(text: str) -> str:
     """Prefix any line that could pass for a delimiter so it cannot match one."""
@@ -64,6 +70,7 @@ def build_brief(
     nonce: str | None = None,
     owner_login: str = "nakomis",
     owner_email: str = "martin@nakomis.com",
+    previous_attempt: str | None = None,
 ) -> str:
     nonce = nonce or secrets.token_hex(4)
     untrusted = "untrusted data"
@@ -81,13 +88,21 @@ def build_brief(
             nonce,
         )
     )
+    if previous_attempt:
+        parts.append("BAU has tried this ticket once before; this is the note that attempt left.\n")
+        parts.append(_block("PREVIOUS ATTEMPT", untrusted, previous_attempt, nonce))
     if feedback:
+        parts.append(REBASE_FIRST)
         if feedback.conflict:
             parts.append(
                 "The branch conflicts with main. Rebase onto origin/main and resolve the conflicts first.\n"
             )
-        if feedback.ci_red and ci_log:
-            parts.append(_block("CI LOG", untrusted, ci_log[-6000:], nonce))
+        if feedback.ci_red:
+            parts.append(
+                "CI is red on this branch: run the project's tests and linters and fix the failures.\n"
+            )
+            if ci_log and ci_log.strip():
+                parts.append(_block("CI LOG", untrusted, ci_log[-6000:], nonce))
         for th in feedback.threads:
             body = "\n".join(
                 _tagged(f"{c.author} ({c.created_at}): {c.body}", c.author == owner_login)

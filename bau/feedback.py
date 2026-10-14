@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from bau.github import Thread
+from bau.github import Thread, ThreadComment
 from bau.plane import Comment
 
 WORKER_MARK = "[bau]"
@@ -24,6 +24,16 @@ class Feedback:
         return not (self.threads or self.plane_comments or self.conflict or self.ci_red)
 
 
+def _login(login: str) -> str:
+    return login.removesuffix("[bot]")
+
+
+def is_worker(comment: ThreadComment, worker_login: str) -> bool:
+    """GraphQL drops the "[bot]" suffix that REST and config carry, so compare without it on both
+    sides; a reply marked [bau] is the worker's whatever login it arrives under."""
+    return _login(comment.author) == _login(worker_login) or comment.body.startswith(WORKER_MARK)
+
+
 def pending_threads(threads: list[Thread], owner_login: str, worker_login: str) -> list[Thread]:
     out = []
     for th in threads:
@@ -31,7 +41,7 @@ def pending_threads(threads: list[Thread], owner_login: str, worker_login: str) 
             continue
         if not any(c.author == owner_login for c in th.comments):
             continue
-        if th.comments[-1].author == worker_login:
+        if is_worker(th.comments[-1], worker_login):
             continue
         out.append(th)
     return out
