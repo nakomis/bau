@@ -22,7 +22,7 @@ from bau.checkout import Repos
 from bau.config import Config, ProjectConfig
 from bau.github import GitHubClient
 from bau.plane import PlaneClient
-from bau.snapshot import read_snapshot
+from bau.snapshot import drop_open_pr, read_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +88,10 @@ def create_app(
         except Exception as e:  # noqa: BLE001 - never echo text that could contain tokens
             log.error("abandon %s failed: %s", ref, type(e).__name__)
             return JSONResponse({"error": "internal error"}, status_code=500)
+        try:
+            drop_open_pr(cfg.paths.snapshot, r.ref)
+        except Exception as e:  # noqa: BLE001 - the abandon itself succeeded; the next snapshot corrects this
+            log.warning("snapshot update after abandon %s failed: %s", ref, type(e).__name__)
         return {"ref": r.ref, "pr": r.pr, "restored_state": r.restored_state}
 
     if static_dir is not None and static_dir.is_dir():

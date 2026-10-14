@@ -84,7 +84,7 @@ def test_abandon_during_run_is_409(cfg, tmp_path):
     with run_lock(cfg.paths.logs.parent / "run.lock"):
         r = client(cfg, tmp_path, plane).post("/abandon/HOME-42", headers=AUTH)
     assert r.status_code == 409
-    assert r.json() == {"error": "a BAU run is in progress; try again after it finishes"}
+    assert r.json() == {"error": "another BAU operation is in progress; try again shortly"}
 
 
 def test_bad_token_beats_invalid_body(cfg, tmp_path):
@@ -117,3 +117,29 @@ def test_unexpected_error_is_500_json_without_detail(cfg, tmp_path):
     r = c.post("/abandon/HOME-42", headers=AUTH)
     assert r.status_code == 500 and r.json() == {"error": "internal error"}
     assert "secret" not in r.text
+
+
+def _snap(*refs):
+    return {"schema": 1, "open_prs": [{"ref": r} for r in refs], "declined": []}
+
+
+def test_abandon_drops_the_pr_from_the_snapshot(cfg, tmp_path):
+    cfg.paths.snapshot.parent.mkdir(parents=True, exist_ok=True)
+    cfg.paths.snapshot.write_text(json.dumps(_snap("HOME-42", "HOME-43")))
+    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    c = client(cfg, tmp_path, plane)
+    assert c.post("/abandon/HOME-42", headers=AUTH).status_code == 200
+    assert [p["ref"] for p in c.get("/state.json").json()["open_prs"]] == ["HOME-43"]
+
+
+def test_abandon_leaves_a_corrupt_or_missing_snapshot_alone(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    c = client(cfg, tmp_path, plane)
+    assert c.post("/abandon/HOME-42", headers=AUTH).status_code == 200
+    assert not cfg.paths.snapshot.exists()
+    cfg.paths.snapshot.parent.mkdir(parents=True, exist_ok=True)
+    cfg.paths.snapshot.write_text("{not json")
+    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    c = client(cfg, tmp_path, plane)
+    assert c.post("/abandon/HOME-42", headers=AUTH).status_code == 200
+    assert cfg.paths.snapshot.read_text() == "{not json"

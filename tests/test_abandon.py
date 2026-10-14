@@ -68,6 +68,38 @@ def test_abandon_without_open_pr_still_restores(tmp_path: Path):
     assert ("delete_checkout", "home-42-rotate-logs") in repos.calls
 
 
+def test_abandon_deletes_the_checkout_named_in_a_real_round_tripped_pickup(tmp_path: Path):
+    plane = FakePlane({"HOME": [item()]})
+    plane.comment("HOME-42", "[bau:picked-up from=Ready] Working on branch `home-42-rotate-logs` in x.")
+    plane.calls.clear()
+    repos = FakeRepos(tmp_path)
+    run(plane, tmp_path, repos=repos)
+    assert ("delete_checkout", "home-42-rotate-logs") in repos.calls
+
+
+def test_set_state_failure_leaves_pr_open_and_label_in_place(tmp_path: Path):
+    class Boom(FakePlane):
+        def set_state(self, ref, state):
+            raise RuntimeError("plane down")
+
+    plane = Boom({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    gh = FakeGitHub(open_prs={REPO: [make_pr()]})
+    repos = FakeRepos(tmp_path)
+    with pytest.raises(RuntimeError):
+        run(plane, tmp_path, gh, repos)
+    assert not any(c[0] == "close_pr" for c in gh.calls)
+    assert not any(c[0] in ("remove_labels", "comment") for c in plane.calls)
+    assert not any(c[0] == "delete_checkout" for c in repos.calls)
+
+
+def test_state_is_restored_before_anything_else_is_touched(tmp_path: Path):
+    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    gh = FakeGitHub(open_prs={REPO: [make_pr()]})
+    run(plane, tmp_path, gh)
+    assert plane.calls[0][0] == "set_state"
+    assert plane.calls[-1][0] == "comment"
+
+
 def test_pr_with_mismatched_branch_is_left_alone(tmp_path: Path):
     plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
     gh = FakeGitHub(open_prs={REPO: [make_pr(head="feature-x")]})
@@ -169,7 +201,7 @@ def test_note_cannot_inject_markers(tmp_path: Path):
     assert ("set_state", ("HOME-42", "Done")) not in plane.calls
 
 
-@pytest.mark.parametrize("state", ["Done", "cancelled", "Archived"])
+@pytest.mark.parametrize("state", ["Done", "cancelled", "Archived", "Ready for test"])
 def test_finished_items_are_not_reopened(tmp_path: Path, state):
     plane = FakePlane({"HOME": [item(state=state)]}, comments={"HOME-42": [picked()]})
     with pytest.raises(AlreadyAbandoned, match=f"nothing to abandon: HOME-42 is {state}"):

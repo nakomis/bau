@@ -15,8 +15,8 @@ from bau.runloop import Night, previous_state
 
 log = logging.getLogger(__name__)
 REF_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*-[1-9][0-9]*$")
-FINISHED_STATES = ("done", "cancelled", "archived")
-RUN_IN_PROGRESS = "a BAU run is in progress; try again after it finishes"
+FINISHED_STATES = ("done", "cancelled", "archived", "ready for test")
+RUN_IN_PROGRESS = "another BAU operation is in progress; try again shortly"
 
 
 class AlreadyAbandoned(RuntimeError):
@@ -101,9 +101,12 @@ def _abandon(ref, plane, github_factory, repos, projects, worker_login, worker_e
 
     ident, _ = split_ref(ref)
     project = projects[ident]
+    gh = github_factory(project.repo)
+    # Restore the state first: if anything later fails, the item is no longer eligible for pick-up
+    # and the PR and label are still there for a retry.
+    plane.set_state(ref, restored)
     pr_number = None
     branch = None
-    gh = github_factory(project.repo)
     for pr in gh.open_prs(project.repo, worker_login):
         if Night.ref_of(pr) == ref and pr.head_ref.startswith(ref.lower() + "-"):
             gh.comment(project.repo, pr.number, "[bau] Abandoned by Martin from the BAU dashboard." + suffix)
@@ -120,7 +123,6 @@ def _abandon(ref, plane, github_factory, repos, projects, worker_login, worker_e
             repos.delete_checkout(branch)
         except ValueError:
             log.warning("refused to delete a checkout for %s", ref)
-    plane.set_state(ref, restored)
     plane.remove_labels(ref, ["BAU"])
     plane.comment(ref, f"[bau:abandoned] by Martin. Returned to {restored}; BAU label removed." + suffix)
     return AbandonResult(ref, pr_number, restored)

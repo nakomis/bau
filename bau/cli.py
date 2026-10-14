@@ -31,6 +31,7 @@ from bau.snapshot import (
     LastRun,
     OpenPrRow,
     build_snapshot,
+    drop_open_pr,
     read_snapshot,
     write_snapshot,
 )
@@ -324,6 +325,10 @@ def _abandon(args: argparse.Namespace, cfg: Config, wired) -> int:
     except AlreadyAbandoned as e:
         print(e)
         return 1
+    try:
+        drop_open_pr(cfg.paths.snapshot, r.ref)
+    except Exception as e:  # noqa: BLE001 - the abandon succeeded; the next snapshot corrects this
+        print(f"warning: could not update the snapshot: {type(e).__name__}", file=sys.stderr)
     print(f"{r.ref}: PR {r.pr}, restored to {r.restored_state}")
     return 0
 

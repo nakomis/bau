@@ -912,3 +912,11 @@ def test_previous_state_ignores_non_worker_comments():
         Comment("c2", "martin@nakomis.com", "", "[bau:picked-up from=Done] x"),
     ]
     assert previous_state(comments, "bau@nakomis.com") == "Ready"
+
+
+def test_already_picked_up_recognises_a_round_tripped_comment(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item()]})
+    plane.comment("HOME-42", "[bau:picked-up from=Ready] Working on branch `home-42-x` in x.")
+    n = night(cfg, plane, FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path))
+    assert n.already_picked_up("HOME-42", "home-42-x", "Ready")
+    assert not n.already_picked_up("HOME-42", "home-42-y", "Ready")

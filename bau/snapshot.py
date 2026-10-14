@@ -105,3 +105,13 @@ def read_snapshot(path: Path) -> dict | None:
         return json.loads(path.read_text())
     except json.JSONDecodeError:
         return None
+
+
+def drop_open_pr(path: Path, ref: str) -> None:
+    """Remove an abandoned item's PR rows from the snapshot; a missing or corrupt snapshot is left alone."""
+    snap = read_snapshot(path)
+    if not isinstance(snap, dict) or not isinstance(snap.get("open_prs"), list):
+        return
+    kept = [r for r in snap["open_prs"] if not (isinstance(r, dict) and r.get("ref") == ref)]
+    if len(kept) != len(snap["open_prs"]):
+        write_snapshot(path, {**snap, "open_prs": kept})

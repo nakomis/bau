@@ -254,7 +254,6 @@ def test_serve_parses():
 
 
 def test_cli_abandon_invalid_ref_exits_2(capsys):
-    from bau.abandon import InvalidRef
     from bau.cli import _abandon
 
     class P:
@@ -268,4 +267,3 @@ def test_cli_abandon_invalid_ref_exits_2(capsys):
     )
     assert _abandon(args, cfg, ({}, P(), None, None, None, None)) == 2
     assert "invalid ref" in capsys.readouterr().out
-    assert InvalidRef
