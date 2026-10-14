@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpenPr } from '../types';
 import PrTable from './PrTable';
@@ -89,6 +89,9 @@ describe('PrTable', () => {
       fireEvent.click(b);
       expect(screen.getAllByRole('button', { name: 'Confirm abandon' })).toHaveLength(1);
       expect(screen.getAllByRole('button', { name: 'Abandon' })).toHaveLength(1);
+      const [cardA, cardB] = screen.getAllByRole('row').slice(1);
+      expect(within(cardA).getByRole('button')).toHaveTextContent(/^Abandon$/);
+      expect(within(cardB).getByRole('button', { name: 'Confirm abandon' })).toBeInTheDocument();
       act(() => {
         vi.advanceTimersByTime(4000);
       });
