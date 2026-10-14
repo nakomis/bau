@@ -165,8 +165,11 @@ class Night:
         self.log(f"{ref}: {reason}")
         if self.dry_run:
             return
+        text = f"[bau] Error while working this ticket: {reason}"
         try:
-            self.plane.comment(ref, f"[bau] Error while working this ticket: {reason}")
+            worker = self.cfg.identities.worker_plane_email
+            if not any(c.author_email == worker and text in c.text for c in self.plane.comments(ref)):
+                self.plane.comment(ref, text)
         except Exception as inner:  # noqa: BLE001 - best effort only
             self.log(f"{ref}: could not post the error comment: {inner}")
 
@@ -259,10 +262,21 @@ class Night:
                     self.errored(ref, e)
 
     def mark_ready_if_green(self, gh: GitHubClient, repo: str, pr: PR, ref: str) -> None:
+        files, lines = pr.changed_files, pr.additions + pr.deletions
+        if diff_too_big(files, lines, self.cfg.limits):
+            item = self.plane.get_item(ref)
+            back = previous_state(self.plane.comments(ref)) or item.state
+            self.close_too_big(item, repo, gh, pr, pr.head_ref, back, f"{files} files / {lines} lines")
+            return
         gh.mark_ready(pr.node_id)
         self.plane.comment(ref, f"[bau] PR #{pr.number} CI is now green; marked ready for review.")
 
     def feedback_one(self, gh: GitHubClient, repo: str, pr: PR, ref: str) -> None:
+        try:
+            item = self.plane.get_item(ref)
+        except ValueError as e:
+            self.log(f"skip PR #{pr.number}: {e}")
+            return
         limit = self.cfg.limits.ci_fix_sessions_per_pr
         ids = self.cfg.identities
         threads = pending_threads(
@@ -294,7 +308,6 @@ class Night:
             return
         if not self.may_start(new_ticket=False):
             return
-        item = self.plane.get_item(ref)
         if not self.repos.has_checkout(pr.head_ref):
             self.repos.checkout_branch(repo, pr.head_ref, self.token(repo))
         elif not fb.conflict and not self.repos.rebase_onto_main(pr.head_ref, self.token(repo)):
@@ -426,7 +439,33 @@ class Night:
             back = previous_state(self.plane.comments(item.ref)) or back
         self.plane.set_state(item.ref, "In progress")
         self.plane.assign(item.ref, self.cfg.identities.worker_plane_email)
-        self.plane.comment(item.ref, f"[bau:picked-up from={back}] Working on branch `{branch}` in {repo}.")
+        if not self.already_picked_up(item.ref, branch, back):
+            self.plane.comment(
+                item.ref, f"[bau:picked-up from={back}] Working on branch `{branch}` in {repo}."
+            )
+        try:
+            self.work_picked_up(item, repo, gh, model, branch, back)
+        except Exception:
+            try:  # leave the ticket where it was so the next night retries it cleanly
+                self.plane.set_state(item.ref, back)
+            except Exception as inner:  # noqa: BLE001 - best effort only
+                self.log(f"{item.ref}: could not restore state {back}: {inner}")
+            raise
+
+    def already_picked_up(self, ref: str, branch: str, back: str) -> bool:
+        worker = self.cfg.identities.worker_plane_email
+        mine = [
+            c
+            for c in self.plane.comments(ref)
+            if c.author_email == worker and "[bau] Error while working this ticket" not in c.text
+        ]
+        return (
+            bool(mine) and f"[bau:picked-up from={back}]" in mine[-1].text and f"`{branch}`" in mine[-1].text
+        )
+
+    def work_picked_up(
+        self, item: Item, repo: str, gh: GitHubClient, model: str, branch: str, back: str
+    ) -> None:
         if self.repos.has_checkout(branch):  # left by a failed earlier night: start afresh from main
             self.repos.delete_checkout(branch)
         self.repos.create_checkout(repo, branch)

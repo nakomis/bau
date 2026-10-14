@@ -123,3 +123,11 @@ def test_checkout_branch_recreates_a_pushed_branch(upstream: Path, tmp_path: Pat
     assert git("rev-parse", "--abbrev-ref", "HEAD", cwd=wt) == "demo-9-pushed"
     assert (wt / "pushed.txt").read_text() == "pushed\n"
     assert git("remote", "get-url", "origin", cwd=wt) == str(upstream)
+
+
+def test_checkout_branch_failure_leaves_no_partial_directory(upstream: Path, tmp_path: Path):
+    repos = Repos(tmp_path / "repos", tmp_path / "work")
+    repos.ensure_bare("nakomis/demo", token="", origin_url=str(upstream))
+    with pytest.raises(RuntimeError):
+        repos.checkout_branch("nakomis/demo", "demo-404-missing")
+    assert not repos.checkout_path("demo-404-missing").exists()

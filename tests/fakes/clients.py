@@ -31,6 +31,9 @@ class FakePlane:
 
     def comment(self, ref, markdown):
         self.calls.append(("comment", (ref, markdown)))
+        self.comments_by_ref.setdefault(ref, []).append(
+            Comment(f"c{len(self.calls)}", "bau@nakomis.com", "", markdown)
+        )
         return "cid"
 
     def set_state(self, ref, state):

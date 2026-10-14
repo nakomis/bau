@@ -1,4 +1,5 @@
 import subprocess
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -606,3 +607,41 @@ def test_merge_comment_carries_short_commit(cfg, tmp_path):
         "comment",
         ("HOME-40", "[bau] PR #5 merged at 2026-10-14T12:00:00Z as deadbee; moved to Ready for test."),
     ) in plane.calls
+
+
+def test_green_draft_over_the_size_limit_is_closed_not_marked_ready(cfg, tmp_path):
+    big = replace(pr(7, "HOME-40", draft=True), changed_files=20)
+    plane = FakePlane(
+        {"HOME": [item(ref="HOME-40", state="In progress")]},
+        comments={"HOME-40": [Comment("c", "bau@nakomis.com", "", "[bau:picked-up from=Ready] x")]},
+    )
+    gh = FakeGitHub(open_prs={REPO: [big]}, ci={"abc": "green"})
+    repos = FakeRepos(tmp_path)
+    runner = FakeRunner([])
+    night(cfg, plane, gh, runner, repos).run()
+    assert runner.briefs == []
+    assert not any(c[0] == "mark_ready" for c in gh.calls)
+    assert ("close_pr", (REPO, 7)) in gh.calls
+    assert ("set_state", ("HOME-40", "Ready")) in plane.calls
+    assert ("delete_checkout", "home-40-rotate-logs") in repos.calls
+    assert not any(c[0] == "remove_labels" for c in plane.calls)
+
+
+def test_error_comment_is_not_repeated_and_failed_ticket_returns_to_its_state(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(state="New")]})
+    repos = FakeRepos(tmp_path)
+    for _ in range(2):
+        gh = FakeGitHub(open_prs={REPO: []})
+        report = night(cfg, plane, gh, FakeRunner([RuntimeError("docker exploded")]), repos).run()
+        assert report.declined[0]["reason"] == "error: RuntimeError: docker exploded"
+    texts = [c[1][1] for c in plane.calls if c[0] == "comment"]
+    assert sum("Error while working this ticket" in t for t in texts) == 1
+    assert sum("[bau:picked-up" in t for t in texts) == 1
+    assert plane.get_item("HOME-42").state == "New"
+
+
+def test_feedback_pass_quietly_skips_a_pr_whose_ref_does_not_resolve(cfg, tmp_path):
+    plane = FakePlane({"HOME": []})
+    gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-99")]}, ci={"abc": "red"})
+    report = night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path)).run()
+    assert plane.calls == [] and report.declined == []

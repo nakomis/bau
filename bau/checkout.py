@@ -83,12 +83,16 @@ class Repos:
         bare = self.bare_path(repo)
         dest = self.checkout_path(branch)
         origin = self._git("remote", "get-url", "origin", cwd=bare).stdout.strip()
-        self._git("clone", "--reference", str(bare), "--branch", "main", str(bare), str(dest))
-        self._git("remote", "set-url", "origin", origin, cwd=dest)
-        self._git(
-            "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}", cwd=dest, token=token
-        )
-        self._git("checkout", "-B", branch, f"origin/{branch}", cwd=dest)
+        try:
+            self._git("clone", "--reference", str(bare), "--branch", "main", str(bare), str(dest))
+            self._git("remote", "set-url", "origin", origin, cwd=dest)
+            self._git(
+                "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}", cwd=dest, token=token
+            )
+            self._git("checkout", "-B", branch, f"origin/{branch}", cwd=dest)
+        except BaseException:
+            shutil.rmtree(dest, ignore_errors=True)
+            raise
         return dest
 
     def delete_checkout(self, branch: str) -> None:
