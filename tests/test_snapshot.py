@@ -95,3 +95,9 @@ def test_pace_override_used_only_when_no_latest():
     kw = dict(paused=False, last_run=None, open_prs=[], deploy_pending=[], declined=[], now=0.0)
     assert build_snapshot(latest=None, pace_override=kept, **kw)["pace"] == kept
     assert build_snapshot(latest=None, **kw)["pace"] is None
+
+
+def test_a_corrupt_snapshot_reads_as_none(tmp_path: Path):
+    p = tmp_path / "state.json"
+    p.write_text('{"schema": 1, "trunc')
+    assert read_snapshot(p) is None

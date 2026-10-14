@@ -94,6 +94,10 @@ def test_docker_command_shape(cfg, tmp_path):
     assert "--max-budget-usd 5.0" in joined and "--model claude-opus-5-5" in joined
     assert "--output-format stream-json" in joined and "--dangerously-skip-permissions" in joined
     assert "-e NODE_USE_ENV_PROXY=1" in joined
+    assert "--label bau.session=1" in joined
+    assert "--memory 2500m" in joined and "--pids-limit 1024" in joined
+    assert "--cap-drop ALL" in joined and "--security-opt no-new-privileges" in joined
+    assert cmd.index("--cap-drop") < cmd.index(cfg.container.image)
     no_repo = docker_command(cfg, name="bau-x", checkout=Path("/w"), bare=None, model="m", budget=1.0)
     assert ":ro" not in " ".join(no_repo)
     custom = docker_command(

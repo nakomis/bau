@@ -101,4 +101,7 @@ def read_snapshot(path: Path) -> dict | None:
     path = Path(path)
     if not path.exists():
         return None
-    return json.loads(path.read_text())
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None

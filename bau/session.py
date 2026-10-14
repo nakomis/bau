@@ -42,6 +42,16 @@ def docker_command(
         name,
         "--network",
         cfg.container.network,
+        "--label",
+        "bau.session=1",
+        "--memory",
+        "2500m",
+        "--pids-limit",
+        "1024",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
     ]
     if bare is not None:
         cmd += ["-v", f"{bare}:{bare}:ro"]

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from bau.config import Limits, ProjectConfig, load_config, load_projects
+from bau.config import Limits, ProjectConfig, load_config, load_projects, paused_reader
 
 MINIMAL = """
 paused: false
@@ -58,3 +58,25 @@ def test_projects_map_identifier_to_repo(tmp_path: Path):
     projects = load_projects(p)
     assert projects["HOME"] == ProjectConfig("HOME", "nakomis/home-infra", True, "Run the playbook")
     assert projects["BAU"].deploy_action == ""
+
+
+@pytest.mark.parametrize("value,expected", [("true", True), ("false", False), ('"yes"', False), ("1", False)])
+def test_paused_is_only_a_literal_yaml_true(tmp_path: Path, value, expected):
+    p = tmp_path / "bau.yaml"
+    p.write_text(MINIMAL.replace("paused: false", f"paused: {value}"))
+    assert load_config(p).paused is expected
+
+
+def test_paused_reader_rereads_the_flag_and_keeps_the_last_value_on_a_bad_file(tmp_path: Path):
+    p = tmp_path / "bau.yaml"
+    p.write_text(MINIMAL)
+    read = paused_reader(p, initial=False)
+    assert read() is False
+    p.write_text(MINIMAL.replace("paused: false", "paused: true"))
+    assert read() is True
+    p.write_text("paused: [unclosed\n")
+    assert read() is True
+    p.write_text(MINIMAL.replace("paused: false", "paused: 'true'"))
+    assert read() is False
+    p.unlink()
+    assert read() is False

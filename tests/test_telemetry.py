@@ -63,3 +63,25 @@ def test_non_dict_windows_are_treated_as_empty():
 def test_non_dict_rate_limit_info_is_treated_as_empty():
     rl = rate_limit_from_event({"type": "rate_limit_event", "rate_limit_info": ["x"]})
     assert rl == RateLimit("unknown", None, None)
+
+
+def test_non_finite_window_values_are_unknown():
+    for bad in (
+        {"utilization": float("nan"), "resetsAt": 1},
+        {"utilization": float("inf"), "resetsAt": 1},
+        {"utilization": 0.1, "resetsAt": float("inf")},
+        {"utilization": 0.1, "resetsAt": float("nan")},
+    ):
+        event = json.loads(json.dumps(EVENT))
+        event["rate_limit_info"]["unifiedWindows"]["seven_day"] = bad
+        rl = rate_limit_from_event(event)
+        assert rl is not None and rl.seven_day is None and rl.five_hour == Window(0.55, 1791994800)
+
+
+def test_nan_from_the_stream_is_unknown():
+    line = (
+        '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","unifiedWindows":'
+        '{"seven_day":{"utilization":NaN,"resetsAt":Infinity}}}}'
+    )
+    rl = rate_limit_from_event(parse_stream_line(line))
+    assert rl is not None and rl.seven_day is None

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import time
 from pathlib import Path
@@ -121,7 +122,7 @@ def _time(value: str) -> time:
 def load_config(path: Path) -> Config:
     raw = yaml.safe_load(Path(path).read_text())
     return Config(
-        paused=bool(raw["paused"]),
+        paused=raw["paused"] is True,
         schedule=Schedule(_time(raw["schedule"]["no_new_sessions_after"]), raw["schedule"]["timezone"]),
         limits=Limits(**raw["limits"]),
         models=Models(**raw["models"]),
@@ -142,6 +143,24 @@ def load_config(path: Path) -> Config:
         paths=Paths(**{k: Path(v).expanduser() for k, v in raw["paths"].items()}),
         container=Container(**raw["container"]),
     )
+
+
+def paused_reader(path: Path, initial: bool) -> Callable[[], bool]:
+    """Re-read only the `paused` flag, so a pause takes effect before the next session. True only
+    for a literal YAML `true`; a file that will not parse keeps the last value seen."""
+    last = [initial]
+
+    def read() -> bool:
+        try:
+            raw = yaml.safe_load(Path(path).read_text())
+        except (OSError, yaml.YAMLError):
+            return last[0]
+        if not isinstance(raw, dict):
+            return last[0]
+        last[0] = raw.get("paused") is True
+        return last[0]
+
+    return read
 
 
 def load_projects(path: Path) -> dict[str, ProjectConfig]:

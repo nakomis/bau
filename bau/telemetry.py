@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass
 
@@ -35,9 +36,12 @@ def _window(d: object) -> Window | None:
     if not isinstance(d, dict):
         return None
     try:
-        return Window(float(d["utilization"]), int(d["resetsAt"]))
+        utilization, resets_at = float(d["utilization"]), float(d["resetsAt"])
     except (KeyError, TypeError, ValueError):
         return None
+    if not (math.isfinite(utilization) and math.isfinite(resets_at)):
+        return None
+    return Window(utilization, int(resets_at))
 
 
 def rate_limit_from_event(event: dict) -> RateLimit | None:
