@@ -1,6 +1,8 @@
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from bau.config import Limits, Schedule
 from bau.policy import Decision, Policy, elapsed_fraction, pace_allows
 from bau.telemetry import RateLimit, Window
@@ -95,3 +97,26 @@ def test_ceiling_applies_only_to_new_tickets():
     assert p.can_start_session(
         latest=rl(0.0), open_prs=50, sessions_started=0, paused=False, new_ticket=False
     ).allowed
+
+
+def test_ceiling_holds_when_telemetry_is_missing():
+    d = policy(at(2)).can_start_session(
+        latest=None, open_prs=50, sessions_started=0, paused=False, new_ticket=True
+    )
+    assert d == Decision(False, "ceiling")
+
+
+def test_cutoff_uses_the_schedule_timezone_not_the_clock_offset():
+    # 04:30 UTC on 15 Oct 2026 is 05:30 Europe/London (BST): past the 05:00 cutoff.
+    utc_now = datetime(2026, 10, 15, 4, 30, tzinfo=ZoneInfo("UTC"))
+    d = Policy(LIMITS, SCHEDULE, clock=lambda: utc_now).can_start_session(
+        latest=rl(0.0), open_prs=0, sessions_started=0, paused=False, new_ticket=False
+    )
+    assert d == Decision(False, "cutoff")
+
+
+def test_naive_clock_is_rejected():
+    naive = datetime(2026, 10, 15, 2, 0)
+    p = Policy(LIMITS, SCHEDULE, clock=lambda: naive)
+    with pytest.raises(ValueError):
+        p.can_start_session(latest=rl(0.0), open_prs=0, sessions_started=0, paused=False, new_ticket=True)

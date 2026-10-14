@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from bau.config import Limits, Schedule
 from bau.telemetry import RateLimit, Window
@@ -52,8 +53,13 @@ class Policy:
         if latest is not None and latest.status == "rejected":
             return Decision(False, "rejected")
         now = self.clock()
-        if now.timetz().replace(tzinfo=None) >= self.schedule.no_new_sessions_after:
+        if now.tzinfo is None:
+            raise ValueError("policy clock must return a timezone-aware datetime")
+        local = now.astimezone(ZoneInfo(self.schedule.timezone))
+        if local.time() >= self.schedule.no_new_sessions_after:
             return Decision(False, "cutoff")
+        if new_ticket and open_prs >= self.limits.open_pr_ceiling:
+            return Decision(False, "ceiling")
         if latest is None or latest.seven_day is None or latest.five_hour is None:
             if sessions_started < self.limits.fail_closed_sessions:
                 return Decision(True, "telemetry-missing")
@@ -63,6 +69,4 @@ class Policy:
         pace = pace_allows(latest.seven_day, now.timestamp(), self.limits.pace_margin)
         if not pace.allowed:
             return pace
-        if new_ticket and open_prs >= self.limits.open_pr_ceiling:
-            return Decision(False, "ceiling")
         return OK

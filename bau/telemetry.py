@@ -31,17 +31,24 @@ def parse_stream_line(line: str) -> dict | None:
     return obj if isinstance(obj, dict) else None
 
 
-def _window(d: dict | None) -> Window | None:
-    if not d or "utilization" not in d or "resetsAt" not in d:
+def _window(d: object) -> Window | None:
+    if not isinstance(d, dict):
         return None
-    return Window(float(d["utilization"]), int(d["resetsAt"]))
+    try:
+        return Window(float(d["utilization"]), int(d["resetsAt"]))
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def rate_limit_from_event(event: dict) -> RateLimit | None:
     if event.get("type") != "rate_limit_event":
         return None
-    info = event.get("rate_limit_info") or {}
-    windows = info.get("unifiedWindows") or {}
+    info = event.get("rate_limit_info")
+    if not isinstance(info, dict):
+        info = {}
+    windows = info.get("unifiedWindows")
+    if not isinstance(windows, dict):
+        windows = {}
     return RateLimit(
         status=str(info.get("status", "unknown")),
         five_hour=_window(windows.get("five_hour")),

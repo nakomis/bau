@@ -43,3 +43,23 @@ def test_result_hit_limit_matches_the_documented_text():
     assert result_hit_limit({"is_error": True, "result": "You've hit your session limit · resets 3:45pm"})
     assert not result_hit_limit({"is_error": False, "result": "ok"})
     assert not result_hit_limit({"is_error": True, "result": "Not logged in · Please run /login"})
+
+
+def test_malformed_window_fields_are_unknown_not_errors():
+    event = json.loads(json.dumps(EVENT))
+    event["rate_limit_info"]["unifiedWindows"]["five_hour"] = {"utilization": None, "resetsAt": 1}
+    event["rate_limit_info"]["unifiedWindows"]["seven_day"] = {"utilization": 0.1, "resetsAt": "soon"}
+    rl = rate_limit_from_event(event)
+    assert rl is not None and rl.five_hour is None and rl.seven_day is None
+
+
+def test_non_dict_windows_are_treated_as_empty():
+    event = json.loads(json.dumps(EVENT))
+    event["rate_limit_info"]["unifiedWindows"] = "nope"
+    rl = rate_limit_from_event(event)
+    assert rl == RateLimit("allowed_warning", None, None)
+
+
+def test_non_dict_rate_limit_info_is_treated_as_empty():
+    rl = rate_limit_from_event({"type": "rate_limit_event", "rate_limit_info": ["x"]})
+    assert rl == RateLimit("unknown", None, None)
