@@ -80,7 +80,9 @@ The run reads `bau.yaml` once, when `bau run` starts. A change therefore takes e
 
 ```bash
 launchctl bootout gui/$(id -u)/com.nakomis.bau-run
-docker ps --format '{{.Names}}' | grep '^bau-' | grep -v '^bau-egress$' | xargs -r docker kill
+export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock   # an interactive shell may not have this
+ids=$(docker ps --format '{{.Names}}' | grep '^bau-' | grep -v '^bau-egress$')
+[ -n "$ids" ] && echo "$ids" | xargs docker kill
 ```
 
 `bootout` stops the `bau` process but not a running agent container, so the second line kills any containers named `bau-<ref>`. The egress proxy (`bau-egress`) is left running.
