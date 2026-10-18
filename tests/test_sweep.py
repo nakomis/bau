@@ -266,3 +266,25 @@ def test_session_runner_takes_a_wall_clock_override(cfg):
 
     assert SessionRunner(cfg).wall_clock_seconds == 60 * 60
     assert SessionRunner(cfg, wall_clock_minutes=15).wall_clock_seconds == 900
+
+
+def test_sweep_pass_paused_night_writes_no_no_repo_labels(cfg):
+    plane = FakePlane({"NOREPO": [item("NOREPO-1")]})
+    n = make_night(cfg, plane, FakeRunner([]), paused=lambda: True)
+    sweep_pass(n)
+    assert plane.calls == [] and n.report.stop_reason == "paused" and n.report.swept == 0
+
+
+def test_sweep_pass_batches_log_to_separate_files(cfg):
+    cfg = replace(cfg, limits=replace(cfg.limits, sweep_batch_items=1))
+    logs = []
+
+    class Spy(FakeRunner):
+        def run(self, **k):
+            logs.append(k["log_path"].name)
+            return super().run(**k)
+
+    sweep_pass(
+        make_night(cfg, FakePlane({"HOME": [item("HOME-1"), item("HOME-2")]}), Spy([verdicts(), verdicts()]))
+    )
+    assert len(logs) == 2 and len(set(logs)) == 2 and logs[0].endswith("sweep-HOME-1.log")

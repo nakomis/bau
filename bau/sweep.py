@@ -186,11 +186,14 @@ def sweep_pass(night: Night) -> None:
         asked = []
         for it in items:
             if repo_for(it, night.projects) is None:
+                if night.paused():  # a paused night writes nothing; the items wait for another night
+                    night.report.stop_reason = "paused"
+                    return
                 _label(night, it.ref, "not-bau", NO_REPO_REASON)
             else:
                 asked.append(it)
         size = limits.sweep_batch_items
-        for start in range(0, len(asked), size):
+        for batch, start in enumerate(range(0, len(asked), size), 1):
             if not night.may_start():
                 return
             brief, refs = build_sweep_brief(ident, asked[start : start + size])
@@ -202,7 +205,7 @@ def sweep_pass(night: Night) -> None:
                     bare=None,
                     brief=brief,
                     model=night.cfg.models.default,
-                    log_name=f"sweep-{ident}",
+                    log_name=f"sweep-{ident}-{batch}",
                     wall_clock_minutes=limits.sweep_session_wall_clock_minutes,
                 )
             if result.outcome == "rate_limited":
