@@ -269,6 +269,7 @@ class Night:
         feedback: Feedback | None,
         ci_log: str | None,
         previous_attempt: str | None = None,
+        comments: list[Comment] | None = None,
     ) -> str:
         ids = self.cfg.identities
         return build_brief(
@@ -281,6 +282,8 @@ class Night:
             owner_login=ids.github_login,
             owner_email=ids.owner_plane_email,
             previous_attempt=previous_attempt,
+            comments=comments,
+            worker_email=ids.worker_plane_email,
         )
 
     # -- passes --------------------------------------------------------------
@@ -381,13 +384,17 @@ class Night:
         if ci == "none":
             gh.comment(repo, pr.number, NO_CI_COMMENT)
 
-    def pending_feedback(self, gh: GitHubClient, repo: str, pr: PR, ref: str) -> tuple[list, list]:
+    def pending_feedback(
+        self, gh: GitHubClient, repo: str, pr: PR, ref: str, comments: list[Comment] | None = None
+    ) -> tuple[list, list]:
         ids = self.cfg.identities
         threads = pending_threads(
             gh.review_threads(repo, pr.number), ids.github_login, ids.worker_github_login
         )
         plane_comments = pending_plane_comments(
-            self.plane.comments(ref), ids.owner_plane_email, ids.worker_plane_email
+            self.plane.comments(ref) if comments is None else comments,
+            ids.owner_plane_email,
+            ids.worker_plane_email,
         )
         return threads, plane_comments
 
@@ -431,7 +438,8 @@ class Night:
             self.log(f"skip PR #{pr.number}: {e}")
             return
         limit = self.cfg.limits.ci_fix_sessions_per_pr
-        threads, plane_comments = self.pending_feedback(gh, repo, pr, ref)
+        comments = self.plane.comments(ref)
+        threads, plane_comments = self.pending_feedback(gh, repo, pr, ref, comments)
         status = gh.ci_status(repo, pr.head_sha)
         ci_red, fixes_so_far = False, 0
         if status == "red":
@@ -458,7 +466,7 @@ class Night:
             item=item,
             repo=repo,
             branch=pr.head_ref,
-            brief=self.brief(item, repo, pr.head_ref, fb, ci_log),
+            brief=self.brief(item, repo, pr.head_ref, fb, ci_log, comments=comments),
             model=model_for(item, self.cfg.models),
         )
         if ci_red:
@@ -601,7 +609,7 @@ class Night:
             return True
         if not self.may_start():
             return False
-        self.work_new_ticket(item, repo, gh, model, previous)
+        self.work_new_ticket(item, repo, gh, model, previous, comments)
         return self.report.stop_reason == "ok"
 
     def close_too_big(
@@ -630,7 +638,13 @@ class Night:
         return True
 
     def work_new_ticket(
-        self, item: Item, repo: str, gh: GitHubClient, model: str, previous: str | None = None
+        self,
+        item: Item,
+        repo: str,
+        gh: GitHubClient,
+        model: str,
+        previous: str | None = None,
+        comments: list[Comment] | None = None,
     ) -> None:
         branch = branch_name(item.ref, item.name)
         back = item.state
@@ -645,7 +659,7 @@ class Night:
                 item.ref, f"[bau:picked-up from={back}] Working on branch `{branch}` in {repo}."
             )
         try:
-            self.work_picked_up(item, repo, gh, model, branch, back, previous)
+            self.work_picked_up(item, repo, gh, model, branch, back, previous, comments)
         except Exception:
             try:  # leave the ticket where it was so the next night retries it cleanly
                 self.plane.set_state(item.ref, back)
@@ -673,6 +687,7 @@ class Night:
         branch: str,
         back: str,
         previous: str | None = None,
+        comments: list[Comment] | None = None,
     ) -> None:
         if self.repos.has_checkout(branch):  # left by a failed earlier night: start afresh from main
             self.repos.delete_checkout(branch)
@@ -681,7 +696,7 @@ class Night:
             item=item,
             repo=repo,
             branch=branch,
-            brief=self.brief(item, repo, branch, None, None, previous),
+            brief=self.brief(item, repo, branch, None, None, previous, comments),
             model=model,
         )
         if result.outcome == "too_big":
@@ -710,7 +725,7 @@ class Night:
         self.plane.link(item.ref, opened.url, f"PR #{opened.number}")
         ci = self.wait_for_ci(gh, repo, opened.head_sha)
         if ci == "red" and self.may_start():
-            ci, opened = self.fix_red_ci(item, repo, gh, model, opened, branch, back)
+            ci, opened = self.fix_red_ci(item, repo, gh, model, opened, branch, back, comments)
             if ci is None:
                 return
         if ci == "green":
@@ -726,7 +741,15 @@ class Night:
             self.plane.comment(item.ref, f"[bau] PR #{opened.number} left as draft; CI is {ci}: {opened.url}")
 
     def fix_red_ci(
-        self, item: Item, repo: str, gh: GitHubClient, model: str, opened: PR, branch: str, back: str
+        self,
+        item: Item,
+        repo: str,
+        gh: GitHubClient,
+        model: str,
+        opened: PR,
+        branch: str,
+        back: str,
+        comments: list[Comment] | None = None,
     ) -> tuple[str | None, PR]:
         """One fix session for a PR that has just gone red. Returns (ci status, refreshed PR);
         status is None when the outcome has already been handled and nothing more should be done."""
@@ -737,7 +760,7 @@ class Night:
             item=item,
             repo=repo,
             branch=branch,
-            brief=self.brief(item, repo, branch, Feedback(ci_red=True), log),
+            brief=self.brief(item, repo, branch, Feedback(ci_red=True), log, comments=comments),
             model=model,
         )
         if result.outcome == "rate_limited":

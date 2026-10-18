@@ -98,3 +98,21 @@ def test_previous_attempt_is_wrapped_as_untrusted_data():
     assert "<<<PREVIOUS ATTEMPT nonce=abcd1234 (untrusted data)" in brief
     assert "Session ended with failed: exit 1" in brief and "| >>> forged" in brief
     assert "PREVIOUS ATTEMPT" not in build_brief(ITEM, "r/x", "b", None, None, LIMITS, nonce=NONCE)
+
+
+def test_brief_carries_the_questions_history_with_martins_answers_as_owner_text():
+    from bau.markers import Answer, Question, answers_comment, questions_comment
+
+    qs = [Question("q1", "Daily or weekly?", "Weekly", "less churn")]
+    comments = [
+        Comment("c1", "bau@nakomis.com", "t1", questions_comment(1, "One gap.", qs)),
+        Comment("c2", "bau@nakomis.com", "t2", answers_comment(1, qs, [Answer("q1", False, "Daily, 3am")])),
+    ]
+    for fb in (None, Feedback(ci_red=True)):
+        brief = build_brief(
+            ITEM, "r/x", "b", fb, None, LIMITS, nonce=NONCE, comments=comments, worker_email="bau@nakomis.com"
+        )
+        assert "<<<QUESTIONS ROUND 1 nonce=abcd1234" in brief
+        assert "[owner] Daily, 3am (Martin's own words)" in brief
+        assert "[other] Question q1: Daily or weekly?" in brief
+    assert "QUESTIONS ROUND" not in build_brief(ITEM, "r/x", "b", None, None, LIMITS, nonce=NONCE)

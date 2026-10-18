@@ -1139,3 +1139,53 @@ def test_session_ended_reason_is_cleaned(cfg, tmp_path):
     night(cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, FakeRepos(tmp_path)).run()
     ended = next(c[1][1] for c in plane.calls if c[0] == "comment" and "Session ended" in c[1][1])
     assert ended == "[bau] Session ended with timeout: see (bau:triage x) evil"
+
+
+# -- end to end: sweep, questions, answers, ready, pickup (C1) -------------------
+def test_martins_answers_reach_the_ticket_session(cfg, tmp_path):
+    from bau.answers import submit_answers
+    from bau.markers import Answer, latest_asked
+
+    worker = "bau@nakomis.com"
+    plane = FakePlane({"HOME": [replace(item(labels=()), state_group="backlog")]})
+    gh = FakeGitHub(open_prs={REPO: []})
+    sweep_out = {"verdicts": [{"ref": "HOME-42", "verdict": "bau", "reason": "small"}]}
+    asks = {
+        "verdict": "questions",
+        "reason": "one choice",
+        "summary": "Clear but for the schedule.",
+        "questions": [{"id": "q1", "text": "Daily or weekly?", "recommendation": "Weekly", "why": "calm"}],
+    }
+    first = FakeRunner([triage_session(sweep_out), triage_session(asks)])
+    night(cfg, plane, gh, first, FakeRepos(tmp_path)).run()
+    assert [b[0] for b in first.briefs] == ["bau-sweep-home", "bau-triage-home-42"]
+    assert plane.get_item("HOME-42").labels == ["BAU", "bau-questions"]
+
+    asked = latest_asked(plane.comments("HOME-42"), worker)
+    submit_answers(
+        "HOME-42", asked.round, asked.at, [Answer("q1", False, "Daily, at 3am")],
+        plane=plane, projects=PROJECTS, worker_email=worker, lock_path=None,
+    )  # fmt: skip
+
+    ready = {"verdict": "ready", "reason": "answered", "summary": "All clear."}
+    second = FakeRunner([triage_session(ready), SessionResult("done", "", good_rl(), 0.5, "Done")])
+    night(cfg, plane, gh, second, FakeRepos(tmp_path)).run()
+    assert [b[0] for b in second.briefs] == ["bau-triage-home-42", "bau-home-42"]
+    ticket_brief = second.briefs[1][2]
+    assert "[owner] Daily, at 3am (Martin's own words)" in ticket_brief
+    assert "[other] Question q1: Daily or weekly?" in ticket_brief
+
+
+def test_feedback_session_brief_carries_the_questions_history(cfg, tmp_path):
+    from bau.markers import Answer, Question, answers_comment, questions_comment
+
+    qs = [Question("q1", "Daily or weekly?", "Weekly", "calm")]
+    history = [
+        Comment("q", "bau@nakomis.com", "", questions_comment(1, "Gap.", qs)),
+        Comment("a", "bau@nakomis.com", "", answers_comment(1, qs, [Answer("q1", True, "Weekly")])),
+    ]
+    plane, gh = red_pr_world([])
+    plane.comments_by_ref["HOME-40"] += history
+    runner = FakeRunner([SessionResult("done", "", good_rl(), 0.3, "fixed")])
+    night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
+    assert "[owner] Weekly (recommendation accepted)" in runner.briefs[0][2]
