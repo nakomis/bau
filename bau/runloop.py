@@ -8,7 +8,14 @@ from datetime import UTC, datetime, timedelta
 
 from bau.checkout import Repos
 from bau.config import Config, Models, ProjectConfig
-from bau.feedback import Feedback, ack_marker, pending_plane_comments, pending_threads
+from bau.feedback import (
+    Feedback,
+    ack_gh_marker,
+    ack_marker,
+    pending_gh_items,
+    pending_plane_comments,
+    pending_threads,
+)
 from bau.github import PR, GitHubApp, GitHubClient, Token
 from bau.outcome import diff_too_big
 from bau.plane import Comment, Item, PlaneClient, split_ref
@@ -312,7 +319,7 @@ class Night:
         if ci == "none":
             gh.comment(repo, pr.number, NO_CI_COMMENT)
 
-    def pending_feedback(self, gh: GitHubClient, repo: str, pr: PR, ref: str) -> tuple[list, list]:
+    def pending_feedback(self, gh: GitHubClient, repo: str, pr: PR, ref: str) -> tuple[list, list, list]:
         ids = self.cfg.identities
         threads = pending_threads(
             gh.review_threads(repo, pr.number), ids.github_login, ids.worker_github_login
@@ -320,7 +327,13 @@ class Night:
         plane_comments = pending_plane_comments(
             self.plane.comments(ref), ids.owner_plane_email, ids.worker_plane_email
         )
-        return threads, plane_comments
+        gh_items = pending_gh_items(
+            gh.issue_comment_rows(repo, pr.number),
+            gh.reviews(repo, pr.number),
+            ids.github_login,
+            ids.worker_github_login,
+        )
+        return threads, plane_comments, gh_items
 
     def ready_pass(self) -> None:
         """Session-free: mark ready every draft whose CI has settled clean and that has no feedback."""
@@ -347,8 +360,8 @@ class Night:
         except ValueError as e:
             self.log(f"skip PR #{pr.number}: {e}")
             return
-        threads, plane_comments = self.pending_feedback(gh, repo, pr, ref)
-        if threads or plane_comments or pr.mergeable_state == "dirty":
+        threads, plane_comments, gh_items = self.pending_feedback(gh, repo, pr, ref)
+        if threads or plane_comments or gh_items or pr.mergeable_state == "dirty":
             return
         if self.dry_run:
             self.report.planned.append(f"ready {ref} -> {repo} PR #{pr.number}")
@@ -362,7 +375,7 @@ class Night:
             self.log(f"skip PR #{pr.number}: {e}")
             return
         limit = self.cfg.limits.ci_fix_sessions_per_pr
-        threads, plane_comments = self.pending_feedback(gh, repo, pr, ref)
+        threads, plane_comments, gh_items = self.pending_feedback(gh, repo, pr, ref)
         status = gh.ci_status(repo, pr.head_sha)
         ci_red, fixes_so_far = False, 0
         if status == "red":
@@ -373,7 +386,9 @@ class Night:
                 giving_up = f"[bau] CI still red after {limit} fix sessions; leaving this for Martin."
                 if not any(giving_up in b for b in bodies):
                     gh.comment(repo, pr.number, giving_up)
-        fb = Feedback(threads, plane_comments, conflict=pr.mergeable_state == "dirty", ci_red=ci_red)
+        fb = Feedback(
+            threads, plane_comments, gh_items, conflict=pr.mergeable_state == "dirty", ci_red=ci_red
+        )
         if fb.empty:  # a clean green draft was handled by ready_pass
             return
         if self.dry_run:
@@ -400,6 +415,9 @@ class Night:
             )
             return
         self.report.feedback_handled += 1
+        if gh_items:
+            markers = " ".join(ack_gh_marker(i.key) for i in gh_items)
+            gh.comment(repo, pr.number, f"[bau] Addressed in this PR. {markers}")
         for c in plane_comments:
             self.plane.comment(ref, f"[bau] Addressed in PR #{pr.number}. {ack_marker(c.id)}")
         if pr.draft:
