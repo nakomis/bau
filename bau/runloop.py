@@ -42,6 +42,11 @@ FAILED_ATTEMPT_PREFIXES = (
     "[bau] Session ended with",
     "[bau] Session finished but no PR",
 )
+# Stops caused by the usage limit, not by the ticket: posted under their own prefix and never counted.
+USAGE_LIMIT_OUTCOMES = ("rate_limited", "killed_five_hour")
+USAGE_LIMIT_PREFIX = "[bau] Session paused by usage limit"
+# Comments posted before usage-limit stops had their own prefix: these do not count either.
+OLD_USAGE_LIMIT_PREFIXES = tuple(f"[bau] Session ended with {o}" for o in USAGE_LIMIT_OUTCOMES)
 MAX_FAILED_ATTEMPTS = 2
 NOT_PICKED_LABELS = ("blocked", "bau-questions", "not-bau")
 TRIED_TWICE = "BAU tried this twice; comment on the ticket to ask for another attempt"
@@ -583,7 +588,9 @@ class Night:
         failures = [
             c
             for c in recent
-            if c.author_email == ids.worker_plane_email and c.text.startswith(FAILED_ATTEMPT_PREFIXES)
+            if c.author_email == ids.worker_plane_email
+            and c.text.startswith(FAILED_ATTEMPT_PREFIXES)
+            and not c.text.startswith(OLD_USAGE_LIMIT_PREFIXES)
         ]
         return failures, recent
 
@@ -597,6 +604,7 @@ class Night:
         failures, recent = self.failed_attempts(comments)
         if len(failures) >= MAX_FAILED_ATTEMPTS:
             self.decline(item, TRIED_TWICE, seen=recent)
+            self.hand_back(item, comments)
             return True
         previous = failures[-1].text if failures else None
         known = {p.repo for p in self.projects.values() if p.repo}
@@ -629,6 +637,14 @@ class Night:
             return False
         self.work_new_ticket(item, repo, gh, model, previous, comments)
         return self.report.stop_reason == "ok"
+
+    def hand_back(self, item: Item, comments: list[Comment]) -> None:
+        """Undo the pick-up of a ticket BAU has stopped trying: its original state, and nobody assigned."""
+        if self.dry_run or item.state.casefold() != "in progress":
+            return
+        worker = self.cfg.identities.worker_plane_email
+        self.plane.set_state(item.ref, previous_state(comments, worker) or item.state)
+        self.plane.unassign(item.ref)
 
     def close_too_big(
         self, item: Item, repo: str, gh: GitHubClient, opened: PR, branch: str, back: str, detail: str
@@ -724,6 +740,9 @@ class Night:
                 f"[bau] Too big for BAU: {_clean(result.reason)}. Returned to {back}. Marked not-bau.",
             )
             self.repos.delete_checkout(branch)
+            return
+        if result.outcome in USAGE_LIMIT_OUTCOMES:
+            self.plane.comment(item.ref, f"{USAGE_LIMIT_PREFIX} ({result.outcome}): {_clean(result.reason)}")
             return
         if result.outcome != "done":
             self.plane.comment(

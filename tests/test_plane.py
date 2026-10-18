@@ -103,6 +103,7 @@ def test_assign_comment_link():
     calls = []
     c = make(lambda r: routes(r, calls))
     c.assign("HOME-42", "bau@nakomis.com")
+    c.unassign("HOME-42")
     assert c.comment("HOME-42", "hello **there**") == "c9"
     c.link("HOME-42", "https://github.com/x/y/pull/1", "PR #1")
     bodies = [(m, p, json.loads(body)) for m, p, body in calls if body]
@@ -111,6 +112,7 @@ def test_assign_comment_link():
         "/api/v1/workspaces/nakomis/projects/p1/work-items/i1/",
         {"assignees": ["u-b"]},
     ) in bodies
+    assert ("PATCH", "/api/v1/workspaces/nakomis/projects/p1/work-items/i1/", {"assignees": []}) in bodies
     assert any(p.endswith("/links/") and b["url"].endswith("/pull/1") for _, p, b in bodies)
     assert any(
         p.endswith("/comments/") and "<strong>there</strong>" in b["comment_html"] for _, p, b in bodies

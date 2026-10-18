@@ -248,6 +248,9 @@ class PlaneClient:
             raise ValueError(f"No Plane member {email}")
         self._patch(ref, {"assignees": [uid]})
 
+    def unassign(self, ref: str) -> None:
+        self._patch(ref, {"assignees": []})
+
     def comment(self, ref: str, markdown: str) -> str:
         meta, raw = self._item(ref)
         c = self._request(
