@@ -123,7 +123,9 @@ def test_snapshot_ignores_unknown_last_run_keys(tmp_path, monkeypatch):
             }
         )
     )
-    cfg = SimpleNamespace(paused=False, paths=SimpleNamespace(snapshot=snap), nudge=NUDGE)
+    cfg = SimpleNamespace(
+        paused=False, paths=SimpleNamespace(snapshot=snap, pause_file=tmp_path / "paused"), nudge=NUDGE
+    )
     monkeypatch.setattr(cli, "load_config", lambda p: cfg)
     monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW))
     assert cli.main(["snapshot"]) == 0
@@ -180,7 +182,9 @@ def run_world(tmp_path, monkeypatch):
     (config_dir / "bau.yaml").write_text("paused: false\n")
     cfg = SimpleNamespace(
         paused=False,
-        paths=SimpleNamespace(snapshot=tmp_path / "state.json", logs=tmp_path / "logs"),
+        paths=SimpleNamespace(
+            snapshot=tmp_path / "state.json", logs=tmp_path / "logs", pause_file=tmp_path / "paused"
+        ),
         nudge=NUDGE,
         claude=SimpleNamespace(oauth_token=None),
     )
@@ -232,6 +236,15 @@ def test_the_run_rereads_the_paused_flag(run_world):
     assert paused() is False
     (run_world.config_dir / "bau.yaml").write_text("paused: true\n")
     assert paused() is True
+
+
+def test_the_run_reads_the_pause_file_outside_the_checkout(run_world, tmp_path):
+    from bau.snapshot import read_snapshot
+
+    run_world.cfg.paths.pause_file.write_text("upgrading Cere\n")
+    assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
+    assert StubNight.instances[0].kwargs["paused"]() is True
+    assert read_snapshot(run_world.snapshot)["paused"] is True
 
 
 def test_a_second_run_exits_quietly_while_one_holds_the_lock(run_world, capsys, monkeypatch):

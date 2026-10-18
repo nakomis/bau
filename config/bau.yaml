@@ -1,5 +1,6 @@
 # Policy lives here, not in code: limits, schedule, models and identities.
 # Secrets are never in this file; they come from the macOS keychain, service `bau`.
+# Prefer `touch ~/bau/paused` (paths.pause_file) to pausing here: editing this file dirties the checkout.
 paused: false
 
 schedule:
@@ -71,6 +72,7 @@ paths:
   work: /Users/nakomis/bau/work
   logs: /Users/nakomis/bau/logs
   snapshot: /Users/nakomis/bau/state.json
+  pause_file: /Users/nakomis/bau/paused
 
 container:
   image: bau-agent:latest

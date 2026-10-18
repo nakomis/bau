@@ -307,7 +307,7 @@ def _write_run_snapshot(
 def _run(args: argparse.Namespace, cfg: Config) -> int:
     wired = wire(cfg, args.config)
     clock = wired[5]
-    paused = paused_reader(args.config / "bau.yaml", cfg.paused)
+    paused = paused_reader(args.config / "bau.yaml", cfg.paused, cfg.paths.pause_file)
     night = _night(args, cfg, wired, paused)
     started = clock()
     try:
@@ -337,7 +337,7 @@ def _locked_out(cfg: Config, args: argparse.Namespace) -> int:
         return 0
     wired = wire(cfg, args.config)
     clock = wired[5]
-    paused = paused_reader(args.config / "bau.yaml", cfg.paused)
+    paused = paused_reader(args.config / "bau.yaml", cfg.paused, cfg.paths.pause_file)
     # failed=True keeps the last known rows and touches no service: nothing ran tonight.
     _write_run_snapshot(cfg, wired, clock(), NightReport(), "locked", paused(), failed=True)
     return 0
@@ -353,7 +353,8 @@ def _dispatch(args: argparse.Namespace) -> int:
     wired = wire(cfg, args.config)
     projects, plane, app, factory, repos, clock = wired
     if args.command == "probe":
-        print(_night(args, cfg, wired, lambda: cfg.paused).probe())
+        paused = paused_reader(args.config / "bau.yaml", cfg.paused, cfg.paths.pause_file)
+        print(_night(args, cfg, wired, paused).probe())
         return 0
     if args.command == "snapshot":
         previous = read_snapshot(cfg.paths.snapshot) or {}
@@ -364,7 +365,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         write_snapshot(
             cfg.paths.snapshot,
             build_snapshot(
-                paused=cfg.paused,
+                paused=paused_reader(args.config / "bau.yaml", cfg.paused, cfg.paths.pause_file)(),
                 last_run=last,
                 latest=None,
                 open_prs=open_rows,
