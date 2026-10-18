@@ -147,3 +147,25 @@ def test_delete_checkout_removes_a_plain_branch(tmp_path: Path):
     (tmp_path / "work" / "home-1-x").mkdir()
     repos.delete_checkout("home-1-x")
     assert not (tmp_path / "work" / "home-1-x").exists()
+
+
+def test_scratch_clone_is_removed(upstream: Path, tmp_path: Path):
+    repos = Repos(tmp_path / "repos", tmp_path / "work")
+    bare = repos.ensure_bare("nakomis/demo", token="", origin_url=f"file://{upstream}")
+    with repos.scratch_clone("nakomis/demo") as clone:
+        assert clone.parent == tmp_path / "work"
+        assert (clone / "README.md").read_text() == "hello\n"
+        assert git("rev-parse", "--abbrev-ref", "HEAD", cwd=clone) == "main"
+        # Self-contained: no alternates (the bare repo is not mounted in a triage session) and no
+        # object file hardlinked into a directory the container can write.
+        assert not (clone / ".git" / "objects" / "info" / "alternates").exists()
+        assert all(os.stat(f).st_nlink == 1 for f in _object_files(bare / "objects"))
+    assert not clone.exists() and (tmp_path / "work").exists()
+
+
+def test_scratch_clone_is_removed_on_error(upstream: Path, tmp_path: Path):
+    repos = Repos(tmp_path / "repos", tmp_path / "work")
+    repos.ensure_bare("nakomis/demo", token="", origin_url=str(upstream))
+    with pytest.raises(KeyError), repos.scratch_clone("nakomis/demo") as clone:
+        raise KeyError("boom")
+    assert not clone.exists()

@@ -80,6 +80,8 @@ class NightReport:
     swept: int = 0
     labelled_bau: int = 0
     labelled_not_bau: int = 0
+    triaged: int = 0
+    asked: int = 0
 
 
 class Night:
@@ -106,6 +108,8 @@ class Night:
         self.paused = paused or (lambda: cfg.paused)
         self.policy = Policy(cfg.limits, cfg.schedule, clock)
         self.report = NightReport()
+        # Repos the GitHub App is installed on: triage reads only those. Starts as every configured repo.
+        self.installed: set[str] = {p.repo for p in projects.values() if p.repo}
         self._tokens: dict[str, Token] = {}
         self._open: dict[str, list[PR]] = {}
         self._open_total = 0

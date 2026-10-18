@@ -111,8 +111,8 @@ def _clean_reason(value: object) -> str:
     return URL_SCHEME.sub("", line)[:200]
 
 
-def _said(reason: str) -> str:
-    return f'the sweep agent said: "{reason}"'
+def _said(reason: str, who: str = "sweep agent") -> str:
+    return f'the {who} said: "{reason}"'
 
 
 def parse_verdicts(text: str, allowed: set[str]) -> list[SweepVerdict]:

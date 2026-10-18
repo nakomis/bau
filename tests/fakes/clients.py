@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import contextlib
+import shutil
+import tempfile
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -195,6 +198,16 @@ class FakeRepos(Repos):
 
     def has_checkout(self, branch):
         return branch in self.checkouts
+
+    @contextlib.contextmanager
+    def scratch_clone(self, repo):
+        self.calls.append(("scratch_clone", repo))
+        self.work_root.mkdir(parents=True, exist_ok=True)
+        dest = Path(tempfile.mkdtemp(prefix="triage-", dir=self.work_root))
+        try:
+            yield dest
+        finally:
+            shutil.rmtree(dest, ignore_errors=True)
 
     def checkout_branch(self, repo, branch, token=""):
         self.calls.append(("checkout_branch", repo, branch))
