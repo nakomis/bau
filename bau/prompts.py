@@ -29,8 +29,10 @@ Rules:
 - If the work needs more than {files} files or {lines} changed lines, a new dependency, a schema
   or interface change, or a deploy to verify, it is larger than maintenance: stop, do not open a
   PR, and make the LAST line of your final message exactly `BAU_TOO_BIG: <one-line reason>`.
-- Feedback sessions: address every review thread, PR comment, review summary and Plane comment
-  in the brief. Reply on each
+- Feedback sessions (the brief says "Session: feedback" under the === TICKET line): before anything
+  else, run `git fetch origin main && git rebase origin/main` and resolve any conflicts; when you
+  push, use `git push --force-with-lease`. Address every review thread, PR comment, review summary
+  and Plane comment in the brief. Reply on each
   review thread with a message starting "[bau]" saying what you changed, and resolve the thread
   only when it is done. For each PR comment, review summary or Plane comment, address it; the
   host records the acknowledgement.
@@ -72,12 +74,6 @@ Rules:
 """
 
 DELIMITERS = ("<<<", ">>>", "===")
-
-# The host never runs git in a checkout a session has used, so the agent brings the branch up to date.
-REBASE_FIRST = (
-    "Before anything else, run `git fetch origin main && git rebase origin/main`; resolve conflicts if any;"
-    " when you push, use `git push --force-with-lease`.\n"
-)
 
 
 def _neutralise(text: str) -> str:
@@ -137,6 +133,7 @@ def build_brief(
     parts = [HOUSE_PROMPT.format(files=limits.too_big_files, lines=limits.too_big_lines)]
     parts.append(
         f"=== TICKET nonce={nonce} ===\nRepository: {repo}\nBranch: {branch}\nRef: {item.ref}\n"
+        f"Session: {'feedback' if feedback else 'new'}\n"
         f"Size limit: {limits.too_big_files} files or {limits.too_big_lines} changed lines\n"
     )
     parts.append(
@@ -155,7 +152,8 @@ def build_brief(
         parts.append("BAU has tried this ticket once before; this is the note that attempt left.\n")
         parts.append(_block("PREVIOUS ATTEMPT", untrusted, previous_attempt, nonce))
     if feedback:
-        parts.append(REBASE_FIRST)
+        # The host never runs git in a checkout a session has used, so the house prompt's
+        # feedback-sessions rule has the agent rebase; this notice is only data.
         if feedback.conflict:
             parts.append(
                 "The branch conflicts with main. Rebase onto origin/main and resolve the conflicts first.\n"
