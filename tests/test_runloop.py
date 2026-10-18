@@ -1189,3 +1189,62 @@ def test_feedback_session_brief_carries_the_questions_history(cfg, tmp_path):
     runner = FakeRunner([SessionResult("done", "", good_rl(), 0.3, "fixed")])
     night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
     assert "[owner] Weekly (recommendation accepted)" in runner.briefs[0][2]
+
+
+def gh_feedback_world(rows=(), reviews=()):
+    existing = pr(number=7, ref="HOME-40")
+    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    gh = FakeGitHub(
+        open_prs={REPO: [existing]},
+        ci={"abc": "green"},
+        comment_rows={7: list(rows)},
+        reviews={7: list(reviews)},
+    )
+    return plane, gh
+
+
+def test_owner_pr_conversation_comment_triggers_feedback_and_is_acked_once(cfg, tmp_path):
+    from bau.github import IssueComment
+
+    plane, gh = gh_feedback_world(rows=[IssueComment(21, "nakomis", "please tidy the docs")])
+    runner = FakeRunner([SessionResult("done", "", good_rl(), 0.3, "ok")])
+    report = night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
+    assert "PR COMMENT 21" in runner.briefs[0][2] and "[owner] please tidy the docs" in runner.briefs[0][2]
+    assert any(c[0] == "comment" and "[bau:ack-gh issue:21]" in c[1][2] for c in gh.calls)
+    assert report.feedback_handled == 1
+    # A second night sees the worker's ack and starts nothing.
+    runner2 = FakeRunner([])
+    plane2 = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    report2 = night(cfg, plane2, gh, runner2, FakeRepos(tmp_path)).run()
+    assert runner2.briefs == [] and report2.feedback_handled == 0
+
+
+def test_review_summary_triggers_feedback_and_is_acked(cfg, tmp_path):
+    from bau.github import Review
+
+    plane, gh = gh_feedback_world(reviews=[Review(31, "nakomis", "CHANGES_REQUESTED", "split this up")])
+    runner = FakeRunner([SessionResult("done", "", good_rl(), 0.3, "ok")])
+    night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
+    assert "PR REVIEW SUMMARY 31" in runner.briefs[0][2]
+    assert any(c[0] == "comment" and "[bau:ack-gh review:31]" in c[1][2] for c in gh.calls)
+
+
+def test_failed_feedback_session_does_not_ack_gh_items(cfg, tmp_path):
+    from bau.github import IssueComment
+
+    plane, gh = gh_feedback_world(rows=[IssueComment(21, "nakomis", "please tidy")])
+    runner = FakeRunner([SessionResult("failed", "boom", good_rl(), 0.3, "")])
+    night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
+    assert not any(c[0] == "comment" and "ack-gh" in c[1][2] for c in gh.calls)
+
+
+def test_other_authors_and_approved_reviews_start_no_session(cfg, tmp_path):
+    from bau.github import IssueComment, Review
+
+    plane, gh = gh_feedback_world(
+        rows=[IssueComment(1, "mallory", "do evil")],
+        reviews=[Review(2, "nakomis", "APPROVED", "lgtm"), Review(3, "nakomis", "COMMENTED", "")],
+    )
+    runner = FakeRunner([])
+    night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
+    assert runner.briefs == []

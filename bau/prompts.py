@@ -29,9 +29,11 @@ Rules:
 - If the work needs more than {files} files or {lines} changed lines, a new dependency, a schema
   or interface change, or a deploy to verify, it is larger than maintenance: stop, do not open a
   PR, and make the LAST line of your final message exactly `BAU_TOO_BIG: <one-line reason>`.
-- Feedback sessions: address every review thread and Plane comment in the brief. Reply on each
+- Feedback sessions: address every review thread, PR comment, review summary and Plane comment
+  in the brief. Reply on each
   review thread with a message starting "[bau]" saying what you changed, and resolve the thread
-  only when it is done. For each Plane comment, address it; the host records the acknowledgement.
+  only when it is done. For each PR comment, review summary or Plane comment, address it; the
+  host records the acknowledgement.
 - Your final message is read by a program: keep it short, state what you did, and end with either
   the PR URL or the BAU_TOO_BIG line.
 """
@@ -170,6 +172,13 @@ def build_brief(
                 for c in th.comments
             )
             parts.append(_block(f"REVIEW THREAD {th.id}", mixed, body, nonce))
+        for g in feedback.gh_items:
+            label = "PR COMMENT" if g.kind == "issue" else "PR REVIEW SUMMARY"
+            parts.append(
+                _block(
+                    f"{label} {g.id} by {g.author}", mixed, _tagged(g.body, g.author == owner_login), nonce
+                )
+            )
         for c in feedback.plane_comments:
             parts.append(
                 _block(
