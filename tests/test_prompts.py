@@ -76,11 +76,14 @@ def test_feedback_brief_tells_the_agent_to_rebase_and_force_with_lease():
     brief = build_brief(
         ITEM, "r/x", "home-42-x", Feedback(threads=[], conflict=False), None, LIMITS, nonce=NONCE
     )
-    assert "run `git fetch origin main && git rebase origin/main`" in brief
-    assert "`git push --force-with-lease`" in brief
+    ticket_at = brief.index(f"=== TICKET nonce={NONCE} ===")
+    assert brief.index("run `git fetch origin main && git rebase origin/main`") < ticket_at
+    assert brief.index("`git push --force-with-lease`") < ticket_at
+    assert brief.rfind("force-with-lease") < ticket_at
+    assert "Session: feedback" in brief[ticket_at:]
     assert "The branch conflicts with main" not in brief
     new = build_brief(ITEM, "r/x", "home-42-x", None, None, LIMITS, nonce=NONCE)
-    assert "force-with-lease" not in new
+    assert "\nSession: new\n" in new and "\nSession: feedback\n" not in new
 
 
 def test_red_ci_is_always_stated_and_the_log_block_only_with_text():
