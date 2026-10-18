@@ -137,7 +137,6 @@ def test_mark_not_bau_run_in_progress(tmp_path: Path):
     assert plane.calls == []
 
 
-
 def test_long_multiline_answer_is_stored_whole(tmp_path: Path):
     plane = waiting_plane()
     text = "\n\n".join(["Paragraph one. " * 50 + "  ", "Second line\r\nthird line"] * 2)
