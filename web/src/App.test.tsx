@@ -245,4 +245,32 @@ describe('App', () => {
     expect(f.mock.calls.some((c) => c[0] === '/not-bau/HOME-9')).toBe(true);
     expect(screen.getByText('HOME-9: marked not-bau')).toBeInTheDocument();
   });
+
+  it('lists repos waiting for the GitHub App even with no questions', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(respond({ ...snap, uninstalled: ['nakomis/a', 'nakomis/b'] })),
+    );
+    await mount();
+    expect(screen.queryByRole('heading', { name: /Questions/ })).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Waiting for the GitHub App: nakomis/a, nakomis/b'),
+    ).toBeInTheDocument();
+  });
+
+  it('refetches after a refused send so a new round appears', async () => {
+    const f = vi.fn((url: string) =>
+      url === '/state.json'
+        ? Promise.resolve(respond({ ...snap, schema: 2, questions: [qrow] }))
+        : Promise.resolve(respond({ error: 'the questions have changed' }, false, 409)),
+    );
+    vi.stubGlobal('fetch', f);
+    await mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send to BAU' }));
+    });
+    expect(screen.getByText('the questions have changed')).toBeInTheDocument();
+    expect(f.mock.calls.filter((c) => c[0] === '/state.json')).toHaveLength(2);
+  });
 });

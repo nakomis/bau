@@ -64,7 +64,13 @@ export default function App() {
 
   const onSend = useCallback(
     async (ref: string, round: number, askedAt: string, answers: Answer[]) => {
-      await submitAnswers(ref, round, askedAt, answers);
+      try {
+        await submitAnswers(ref, round, askedAt, answers);
+      } catch (e) {
+        // A refused send (stale round, no longer waiting) usually means the queue moved: show it now.
+        void refresh();
+        throw e;
+      }
       notify(`${ref}: sent to BAU`);
       void refresh();
     },
@@ -126,10 +132,14 @@ export default function App() {
         <p className="mt-8 text-neutral-500">No snapshot yet.</p>
       ) : (
         <>
+          {(snap.uninstalled ?? []).length > 0 && (
+            <p className="mt-4 text-sm text-neutral-500">
+              Waiting for the GitHub App: {(snap.uninstalled ?? []).join(', ')}
+            </p>
+          )}
           <Questions
             rows={snap.questions ?? []}
             level={snap.nudge?.questions ?? 'ok'}
-            uninstalled={snap.uninstalled ?? []}
             onSend={onSend}
             onNotBau={onNotBau}
           />

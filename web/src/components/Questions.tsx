@@ -13,7 +13,6 @@ type Drafts = Record<string, Record<string, Draft>>;
 type Props = {
   rows: QuestionRow[];
   level: NudgeLevel;
-  uninstalled?: string[];
   onSend: (ref: string, round: number, asked_at: string, answers: Answer[]) => Promise<void>;
   onNotBau: (ref: string) => Promise<void>;
 };
@@ -50,6 +49,7 @@ function Card({
   open,
   draft,
   onToggle,
+  onEngage,
   onDraft,
   onSend,
   onNotBau,
@@ -58,6 +58,7 @@ function Card({
   open: boolean;
   draft: Record<string, Draft>;
   onToggle: () => void;
+  onEngage: () => void;
   onDraft: (id: string, d: Draft) => void;
   onSend: () => Promise<void>;
   onNotBau: () => Promise<void>;
@@ -106,7 +107,8 @@ function Card({
         </span>
       </div>
       {open && (
-        <>
+        // Focus inside the open body pins the card open (not on the header, which toggles).
+        <fieldset className="min-w-0" aria-label={`Questions for ${row.ref}`} onFocus={onEngage}>
           <p className="mt-2 text-sm text-neutral-600 italic dark:text-neutral-400">
             {row.summary}
           </p>
@@ -170,13 +172,13 @@ function Card({
               </button>
             </div>
           </div>
-        </>
+        </fieldset>
       )}
     </div>
   );
 }
 
-export default function Questions({ rows, level, uninstalled = [], onSend, onNotBau }: Props) {
+export default function Questions({ rows, level, onSend, onNotBau }: Props) {
   const [drafts, setDrafts] = useState<Drafts>(loadDrafts);
   const [gone, setGone] = useState<Set<string>>(new Set());
   const [toggled, setToggled] = useState<Record<string, boolean>>({});
@@ -189,7 +191,8 @@ export default function Questions({ rows, level, uninstalled = [], onSend, onNot
   );
   if (sorted.length === 0) return null;
 
-  // Open state: explicit toggles win; otherwise up to three open, or only the first.
+  // Open state: explicit toggles win; otherwise up to three open, or only the first. A card the user
+  // has focused or typed in is pinned open, so a refresh that changes the row count cannot fold it.
   const isOpen = (r: QuestionRow, i: number) =>
     toggled[keyOf(r)] ?? (sorted.length <= OPEN_ALL_UP_TO || i === 0);
 
@@ -226,7 +229,13 @@ export default function Questions({ rows, level, uninstalled = [], onSend, onNot
             open={isOpen(row, i)}
             draft={drafts[k] ?? {}}
             onToggle={() => setToggled((t) => ({ ...t, [k]: !isOpen(row, i) }))}
-            onDraft={(id, d) => setDrafts((all) => ({ ...all, [k]: { ...all[k], [id]: d } }))}
+            onEngage={() => {
+              if (toggled[k] !== true) setToggled((t) => ({ ...t, [k]: true }));
+            }}
+            onDraft={(id, d) => {
+              setToggled((t) => ({ ...t, [k]: true }));
+              setDrafts((all) => ({ ...all, [k]: { ...all[k], [id]: d } }));
+            }}
             onSend={async () => {
               const answers = row.questions.map((q): Answer => {
                 const d = drafts[k]?.[q.id];
@@ -244,11 +253,6 @@ export default function Questions({ rows, level, uninstalled = [], onSend, onNot
           />
         );
       })}
-      {uninstalled.length > 0 && (
-        <p className="text-sm text-neutral-500">
-          Waiting for the GitHub App: {uninstalled.join(', ')}
-        </p>
-      )}
     </section>
   );
 }

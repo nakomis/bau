@@ -20,23 +20,13 @@ const mk = (ref: string, age: number, extra: Partial<QuestionRow> = {}): Questio
   ...extra,
 });
 
-function setup(
-  rows: QuestionRow[],
-  level: 'ok' | 'warn' | 'down' = 'ok',
-  uninstalled: string[] = [],
-) {
+function setup(rows: QuestionRow[], level: 'ok' | 'warn' | 'down' = 'ok') {
   const onSend = vi.fn().mockResolvedValue(undefined);
   const onNotBau = vi.fn().mockResolvedValue(undefined);
-  const view = render(
-    <Questions
-      rows={rows}
-      level={level}
-      uninstalled={uninstalled}
-      onSend={onSend}
-      onNotBau={onNotBau}
-    />,
-  );
-  return { onSend, onNotBau, ...view };
+  const view = render(<Questions rows={rows} level={level} onSend={onSend} onNotBau={onNotBau} />);
+  const update = (next: QuestionRow[]) =>
+    view.rerender(<Questions rows={next} level={level} onSend={onSend} onNotBau={onNotBau} />);
+  return { onSend, onNotBau, update, ...view };
 }
 
 const accepts = () => screen.getAllByRole('button', { name: 'Accept' });
@@ -74,13 +64,6 @@ describe('Questions', () => {
     unmount();
     setup([mk('HOME-1', 4)], 'ok');
     expect(screen.queryByText(/oldest/)).not.toBeInTheDocument();
-  });
-
-  it('lists repos waiting for the GitHub App', () => {
-    setup([mk('HOME-1', 1)], 'ok', ['nakomis/a', 'nakomis/b']);
-    expect(
-      screen.getByText('Waiting for the GitHub App: nakomis/a, nakomis/b'),
-    ).toBeInTheDocument();
   });
 
   it('send disabled until every question answered', () => {
@@ -242,5 +225,32 @@ describe('Questions', () => {
     localStorage.setItem('bau.drafts', '{not json');
     setup([mk('HOME-1', 1)]);
     expect(screen.getByText('First HOME-1?')).toBeInTheDocument();
+  });
+
+  it('a card typed in stays open when a refresh adds rows', () => {
+    const three = [mk('HOME-1', 3), mk('HOME-2', 2), mk('HOME-3', 1)];
+    const { update } = setup(three);
+    fireEvent.change(screen.getAllByPlaceholderText('…or write your own')[4], {
+      target: { value: 'typing' },
+    });
+    update([mk('HOME-0', 9), ...three]);
+    expect(screen.getByText('First HOME-3?')).toBeInTheDocument();
+    expect(screen.queryByText('First HOME-2?')).not.toBeInTheDocument();
+  });
+
+  it('a card focused stays open when a refresh adds rows', () => {
+    const three = [mk('HOME-1', 3), mk('HOME-2', 2), mk('HOME-3', 1)];
+    const { update } = setup(three);
+    fireEvent.focus(screen.getAllByPlaceholderText('…or write your own')[2]);
+    update([mk('HOME-0', 9), ...three]);
+    expect(screen.getByText('First HOME-2?')).toBeInTheDocument();
+  });
+
+  it('clicking a closed card opens it (focus does not fight the toggle)', () => {
+    setup([mk('HOME-1', 4), mk('HOME-2', 3), mk('HOME-3', 2), mk('HOME-4', 1)]);
+    const header = screen.getByRole('button', { name: /HOME-2/ });
+    fireEvent.focus(header);
+    fireEvent.click(header);
+    expect(screen.getByText('First HOME-2?')).toBeInTheDocument();
   });
 });
