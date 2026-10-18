@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { ageLabel } from '../lib/format';
+import { groupByRepo } from '../lib/group';
 import type { OpenPr } from '../types';
+import Badge, { type Tone } from './Badge';
 import ExtLink from './ExtLink';
 
-const ciColour: Record<OpenPr['ci'], string> = {
-  green: 'bg-green-600',
-  red: 'bg-red-600',
-  pending: 'bg-amber-500',
-  none: 'bg-neutral-400',
+const ciTone: Record<OpenPr['ci'], Tone> = {
+  green: 'ok',
+  red: 'bad',
+  pending: 'warn',
+  none: 'neutral',
 };
 
 const CONFIRM_MS = 5000;
@@ -56,16 +58,15 @@ function AbandonControl({
     }
   };
 
-  if (outcome?.ok)
-    return <span className="text-green-700 dark:text-green-400">{outcome.text}</span>;
+  if (outcome?.ok) return <span className="text-ok">{outcome.text}</span>;
   return (
     <div className="flex flex-col gap-1 sm:items-end">
-      {outcome && <span className="text-red-700 dark:text-red-400">{outcome.text}</span>}
+      {outcome && <span className="text-bad">{outcome.text}</span>}
       {armed && (
-        <label className="flex flex-col text-xs text-neutral-500">
+        <label className="flex flex-col text-xs text-dim">
           Note (optional)
           <input
-            className="rounded border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-900 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+            className="rounded-lg border border-line bg-ground px-2 py-1 text-sm text-fg"
             type="text"
             maxLength={500}
             value={note}
@@ -79,7 +80,7 @@ function AbandonControl({
       <button
         type="button"
         disabled={busy}
-        className="self-start text-red-700 underline disabled:opacity-50 sm:self-end dark:text-red-400"
+        className="self-start text-bad underline disabled:opacity-50 sm:self-end"
         onClick={click}
       >
         {armed ? 'Confirm abandon' : 'Abandon'}
@@ -103,63 +104,71 @@ export default function PrTable({ rows, onAbandon }: Props) {
   };
   useEffect(() => () => clearTimeout(timer.current), []);
 
-  if (rows.length === 0) return <p className="text-neutral-500">Nothing awaiting review.</p>;
-  const label =
-    'before:mr-2 before:text-neutral-500 before:content-[attr(data-label)] sm:before:hidden';
+  if (rows.length === 0) return <p className="text-dim">Nothing awaiting review.</p>;
+  const label = 'before:mr-2 before:text-dim before:content-[attr(data-label)] sm:before:hidden';
   return (
-    <table className="block w-full text-sm sm:table">
-      <thead className="hidden text-left text-neutral-500 sm:table-header-group">
-        <tr>
-          <th>PR</th>
-          <th>Repo</th>
-          <th>Age</th>
-          <th>CI</th>
-          <th>Comments</th>
-          <th />
-        </tr>
-      </thead>
-      <tbody className="block sm:table-row-group">
-        {rows.map((r) => (
-          <tr
-            key={r.ref}
-            className="mb-3 block rounded border border-neutral-200 p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-0 sm:border-t sm:p-0 dark:border-neutral-800"
-          >
-            <td className="block py-1 sm:table-cell sm:py-2">
-              <ExtLink className="underline" href={r.url}>
-                {r.ref}: {r.title}
-              </ExtLink>{' '}
-              <ExtLink className="text-neutral-500 underline" href={r.plane_url}>
-                Plane
-              </ExtLink>
-              {r.draft && <span className="ml-2 text-xs text-neutral-500">draft</span>}
-            </td>
-            <td className={`block sm:table-cell ${label}`} data-label="Repo:">
-              {r.repo.replace('nakomis/', '')}
-            </td>
-            <td className={`block sm:table-cell ${label}`} data-label="Age:">
-              {ageLabel(r.age_days)}
-            </td>
-            <td className={`block sm:table-cell ${label}`} data-label="CI:">
-              <span
-                className={`inline-block h-3 w-3 rounded-full ${ciColour[r.ci] ?? ciColour.none}`}
-                title={r.ci}
-              />
-            </td>
-            <td className={`block sm:table-cell ${label}`} data-label="Comments:">
-              {r.unresolved_comments > 0 ? `${r.unresolved_comments} unresolved` : '—'}
-            </td>
-            <td className="block pt-2 sm:table-cell sm:pt-0 sm:text-right">
-              <AbandonControl
-                pr={r.ref}
-                armed={armedRef === r.ref}
-                onArm={arm}
-                onDisarm={disarm}
-                onAbandon={onAbandon}
-              />
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="space-y-4">
+      {groupByRepo(rows).map((g) => (
+        <section
+          key={g.repo}
+          aria-label={g.repo}
+          className="rounded-[14px] border border-line bg-card p-4"
+        >
+          <h3 className="mb-2 text-base font-semibold">
+            {g.repo.replace('nakomis/', '')}{' '}
+            <span className="text-sm font-normal text-dim">({g.prs.length})</span>
+          </h3>
+          <table className="block w-full text-sm sm:table">
+            <thead className="hidden text-left text-dim sm:table-header-group">
+              <tr>
+                <th className="font-normal">PR</th>
+                <th className="font-normal">Age</th>
+                <th className="font-normal">CI</th>
+                <th className="font-normal">Comments</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody className="block sm:table-row-group">
+              {g.prs.map((r) => (
+                <tr
+                  key={r.ref}
+                  className="mb-3 block rounded-lg border border-line p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-0 sm:border-t sm:p-0"
+                >
+                  <td className="block py-1 sm:table-cell sm:py-2">
+                    <ExtLink className="underline" href={r.url}>
+                      {r.ref}: {r.title}
+                    </ExtLink>{' '}
+                    <ExtLink className="text-dim underline" href={r.plane_url}>
+                      Plane
+                    </ExtLink>
+                    {r.draft && <span className="ml-2 text-xs text-dim">draft</span>}
+                  </td>
+                  <td className={`block sm:table-cell ${label}`} data-label="Age:">
+                    {ageLabel(r.age_days)}
+                  </td>
+                  <td className={`block sm:table-cell ${label}`} data-label="CI:">
+                    <Badge tone={ciTone[r.ci] ?? 'neutral'} title={r.ci}>
+                      {r.ci === 'none' ? 'no CI' : r.ci}
+                    </Badge>
+                  </td>
+                  <td className={`block sm:table-cell ${label}`} data-label="Comments:">
+                    {r.unresolved_comments > 0 ? `${r.unresolved_comments} unresolved` : '—'}
+                  </td>
+                  <td className="block pt-2 sm:table-cell sm:pt-0 sm:text-right">
+                    <AbandonControl
+                      pr={r.ref}
+                      armed={armedRef === r.ref}
+                      onArm={arm}
+                      onDisarm={disarm}
+                      onAbandon={onAbandon}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ))}
+    </div>
   );
 }

@@ -3,6 +3,7 @@ import {
   abandon,
   ageLabel,
   fetchState,
+  isFailedStop,
   isStale,
   markNotBau,
   normaliseSnapshot,
@@ -46,7 +47,17 @@ describe('isStale', () => {
   it('is stale beyond 26 hours only', () => {
     expect(isStale('2026-10-13T10:30:00Z', now)).toBe(false);
     expect(isStale('2026-10-13T09:00:00Z', now)).toBe(true);
-    expect(isStale('nonsense', now)).toBe(false);
+    expect(isStale('2026-10-13T10:00:00Z', now)).toBe(false);
+    expect(isStale('2026-10-13T09:59:59Z', now)).toBe(true);
+  });
+  it('treats an absent or unparseable timestamp as stale, as BD-1 does', () => {
+    expect(isStale('nonsense', now)).toBe(true);
+    expect(isStale('', now)).toBe(true);
+    expect(isStale(undefined, now)).toBe(true);
+  });
+  it('allows five minutes of clock skew into the future, no more', () => {
+    expect(isStale('2026-10-14T12:05:00Z', now)).toBe(false);
+    expect(isStale('2026-10-14T12:05:01Z', now)).toBe(true);
   });
 });
 
@@ -205,5 +216,16 @@ describe('submitAnswers and markNotBau', () => {
     const s = normaliseSnapshot({ schema: 2 });
     expect(s.questions).toEqual([]);
     expect(s.uninstalled).toEqual([]);
+  });
+});
+
+describe('isFailedStop', () => {
+  it('matches failed*, preflight* and rejected only', () => {
+    for (const r of ['failed: SystemExit: 143', 'failed', 'preflight: Timeout', 'rejected']) {
+      expect(isFailedStop(r)).toBe(true);
+    }
+    for (const r of ['ok', 'cutoff', 'no work', '', undefined, 'unrejected']) {
+      expect(isFailedStop(r)).toBe(false);
+    }
   });
 });

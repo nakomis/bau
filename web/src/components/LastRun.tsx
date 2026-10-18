@@ -1,8 +1,6 @@
-import { pct, relativeTime } from '../lib/format';
+import { isFailedStop, pct, relativeTime } from '../lib/format';
 import type { Pace, LastRun as Run } from '../types';
-
-const failed = (reason: string) =>
-  reason.startsWith('failed') || reason.startsWith('preflight') || reason === 'rejected';
+import Badge from './Badge';
 
 export default function LastRun({
   run,
@@ -14,21 +12,17 @@ export default function LastRun({
   paused: boolean;
 }) {
   return (
-    <div className="space-y-1 text-sm">
-      {paused && (
-        <p className="font-semibold text-amber-600 dark:text-amber-400">Worker is paused.</p>
-      )}
+    <div className="space-y-1 rounded-[14px] border border-line bg-card p-4 text-sm">
+      {paused && <p className="font-semibold text-warn">Worker is paused.</p>}
       {run ? (
         <>
-          {failed(run.stop_reason) && (
+          {isFailedStop(run.stop_reason) && (
             <p>
-              <span className="rounded bg-red-600 px-2 py-0.5 font-semibold text-white">
-                Last run failed
-              </span>
+              <Badge tone="bad">Last run failed</Badge>
             </p>
           )}
           {run.telemetry === 'missing' && (
-            <p className="font-semibold text-amber-600 dark:text-amber-400">
+            <p className="font-semibold text-warn">
               Telemetry missing: fail-closed, at most two sessions
             </p>
           )}
@@ -48,9 +42,7 @@ export default function LastRun({
           five-hour {pct(pace.five_hour_used)}.
         </p>
       ) : (
-        <p className="text-amber-600 dark:text-amber-400">
-          Usage figures unavailable (telemetry missing).
-        </p>
+        <p className="text-warn">Usage figures unavailable (telemetry missing).</p>
       )}
     </div>
   );

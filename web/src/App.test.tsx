@@ -82,6 +82,58 @@ describe('App', () => {
     expect(screen.getByText('stale')).toBeInTheDocument();
   });
 
+  it('shows the overall tier and groups PRs by repository', async () => {
+    const other = {
+      ...snap.open_prs?.[0],
+      repo: 'nakomis/bau',
+      ref: 'BAU-1',
+      title: 'Other',
+      ci: 'red',
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(respond({ ...snap, open_prs: [...(snap.open_prs ?? []), other] })),
+    );
+    await mount();
+    expect(screen.getByText('Green')).toBeInTheDocument();
+    expect(screen.getByText('All clear')).toBeInTheDocument();
+    const repos = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
+    expect(repos[0]).toMatch(/^bau/);
+    expect(repos[1]).toMatch(/^home-infra/);
+  });
+
+  it('is red and says why when the last run failed', async () => {
+    const last_run = {
+      started: '2026-10-14T01:00:00Z',
+      ended: '2026-10-14T02:00:00Z',
+      sessions: 1,
+      prs_opened: 0,
+      feedback_handled: 0,
+      stop_reason: 'failed: SystemExit: 143',
+      telemetry: 'ok',
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(respond({ ...snap, last_run })));
+    await mount();
+    expect(screen.getByText('Red')).toBeInTheDocument();
+    expect(screen.getByText(/The last run failed \(failed: SystemExit: 143\)/)).toBeInTheDocument();
+  });
+
+  it('is red when the state cannot be loaded', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    await mount();
+    expect(screen.getByText('Red')).toBeInTheDocument();
+  });
+
+  it('refetches when the tab becomes visible again', async () => {
+    const f = vi.fn().mockResolvedValue(respond(snap));
+    vi.stubGlobal('fetch', f);
+    await mount();
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
   it('says there is no snapshot yet', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(respond({ schema: 1, missing: true })));
     await mount();

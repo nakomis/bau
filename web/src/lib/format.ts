@@ -25,10 +25,25 @@ export function relativeTime(iso: string, now: number = Date.now()): string {
   return plural(Math.floor(hours / 24), 'day');
 }
 
-export function isStale(iso: string, now: number = Date.now()): boolean {
-  const then = Date.parse(iso);
-  if (Number.isNaN(then)) return false;
+/** How far ahead of our own clock a snapshot's timestamp may be before it is not trusted. */
+export const CLOCK_SKEW_MS = 5 * 60_000;
+
+/**
+ * Stale as BD-1 judges it (status.rs `bau_status_from`): older than 26 hours,
+ * more than five minutes in the future, or absent / unparseable (which cannot
+ * be trusted, so counts as stale).
+ */
+export function isStale(iso: string | undefined, now: number = Date.now()): boolean {
+  const then = iso ? Date.parse(iso) : Number.NaN;
+  if (Number.isNaN(then)) return true;
+  if (then > now) return then - now > CLOCK_SKEW_MS;
   return now - then > STALE_HOURS * 3_600_000;
+}
+
+/** A run counts as failed when it stopped for a `failed*` or `preflight*` reason, or was `rejected`. */
+export function isFailedStop(reason: string | undefined): boolean {
+  if (!reason) return false;
+  return reason.startsWith('failed') || reason.startsWith('preflight') || reason === 'rejected';
 }
 
 /** Returns the URL only if it is https; anything else (javascript:, data:, http:, garbage) is dropped. */
