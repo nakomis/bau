@@ -564,3 +564,47 @@ def test_stale_snapshot_shows_the_cache_age(run_world, monkeypatch):
     last = read_snapshot(run_world.snapshot)["last_run"]
     assert last["atc"] == "stale"
     assert last["atc_fetched_at"] == "2026-10-13T00:00:00+00:00" and last["atc_age_hours"] == 36.0
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["probe"], ["snapshot"], ["abandon", "HOME-1"]],
+)
+def test_other_commands_without_atc_or_cache_fail_in_one_line(run_world, monkeypatch, capsys, argv):
+    # Final review M5: a clear message and a non-zero exit, no traceback, and nothing touched.
+    previous = '{"open_prs": [{"ref": "HOME-1"}]}'
+    run_world.snapshot.write_text(previous)
+
+    def down(c, d):
+        raise AtcUnavailable("ATC GET /api/projects: ConnectError: no route")
+
+    monkeypatch.setattr(run_world.cli, "wire", down)
+    assert run_world.cli.main([*argv, "--config", str(run_world.config_dir)]) == 1
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert err.splitlines() == [
+        f"bau {argv[0]}: preflight: atc: ATC GET /api/projects: ConnectError: no route"
+        " (and no cached copy); nothing done"
+    ]
+    assert run_world.snapshot.read_text() == previous
+
+
+def test_serve_without_atc_or_cache_serves_with_no_projects(run_world, monkeypatch, capsys):
+    served = {}
+
+    def down(c, d):
+        raise AtcUnavailable("no route")
+
+    def services(cfg, state):
+        served["state"] = state
+        return state.projects, "plane", "app", "factory", "repos", lambda: NOW, state
+
+    import bau.api
+
+    monkeypatch.setattr(run_world.cli, "wire", down)
+    monkeypatch.setattr(run_world.cli, "wire_services", services)
+    monkeypatch.setattr(bau.api, "create_app", lambda cfg, projects, *a: ("app", projects))
+    monkeypatch.setattr(bau.api, "serve", lambda app, port: served.setdefault("app", app))
+    assert run_world.cli.main(["serve", "--config", str(run_world.config_dir)]) == 0
+    assert served["app"] == ("app", {}) and served["state"].stale
+    assert "serving with no projects" in capsys.readouterr().err

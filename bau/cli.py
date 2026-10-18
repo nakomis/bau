@@ -101,6 +101,11 @@ def wire(cfg: Config, config_dir: Path):
     atc_state = load_atc_state(
         AtcClient(cfg.atc.url, cfg.plane.client_cert, cfg.plane.client_key), cfg.paths.atc_cache
     )
+    return wire_services(cfg, atc_state)
+
+
+def wire_services(cfg: Config, atc_state: AtcState):
+    """The clients around an ATC state already in hand (wire()'s second half)."""
     projects = atc_state.projects
     plane = PlaneClient(
         cfg.plane.url,
@@ -397,7 +402,19 @@ def _dispatch(args: argparse.Namespace) -> int:
             if not held:
                 return _locked_out(cfg, args)
             return _run(args, cfg)
-    wired = wire(cfg, args.config)
+    try:
+        wired = wire(cfg, args.config)
+    except AtcUnavailable as e:
+        if args.command != "serve":
+            print(f"bau {args.command}: {ATC_STOP}: {e} (and no cached copy); nothing done", file=sys.stderr)
+            return exit_code(ATC_STOP)
+        # The dashboard still serves the snapshot; writes that need a project refuse until a
+        # restart after ATC (or its cache) is back. launchd's KeepAlive would otherwise respawn it.
+        print(
+            f"bau serve: {ATC_STOP}: {e} (and no cached copy); serving with no projects",
+            file=sys.stderr,
+        )
+        wired = wire_services(cfg, AtcState({}, {}, True))
     projects, plane, app, factory, repos, clock, _ = wired
     if args.command == "probe":
         paused = paused_reader(args.config / "bau.yaml", cfg.paused, cfg.paths.pause_file)
