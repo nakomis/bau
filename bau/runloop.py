@@ -278,18 +278,28 @@ class Night:
 
     # -- passes --------------------------------------------------------------
     def preflight(self) -> bool:
-        """One Plane call and one GitHub call before anything else: an unreachable service ends the
-        night with a snapshot that says so, rather than a crash part-way through."""
+        """One Plane call, then GitHub tokens until one mints: an unreachable service ends the night
+        with a snapshot that says so, rather than a crash part-way through. One repo without an
+        installation is not an outage; the repo loop in run() skips it."""
         try:
-            ident, repo = next(((i, p.repo) for i, p in self.projects.items() if p.repo), (None, None))
-            self.plane._project(ident or next(iter(self.projects)))
-            if repo:
-                self.token(repo)
+            ident = next((i for i, p in self.projects.items() if p.repo), next(iter(self.projects)))
+            self.plane._project(ident)
         except Exception as e:
-            self.report.stop_reason = f"preflight: {type(e).__name__}"
-            self.log(f"preflight failed: {type(e).__name__}: {e}")
-            return False
-        return True
+            return self.preflight_failed(e)
+        last: Exception | None = None
+        for repo in sorted({p.repo for p in self.projects.values() if p.repo}):
+            try:
+                self.token(repo)
+                return True
+            except Exception as e:
+                last = e
+                self.log(f"preflight: no token for {repo}: {type(e).__name__}: {e}")
+        return True if last is None else self.preflight_failed(last)
+
+    def preflight_failed(self, e: Exception) -> bool:
+        self.report.stop_reason = f"preflight: {type(e).__name__}"
+        self.log(f"preflight failed: {type(e).__name__}: {e}")
+        return False
 
     def run(self) -> NightReport:
         from bau import sweep, triage  # deferred: both import this module
@@ -303,17 +313,18 @@ class Night:
         self.installed = set()
         for repo in sorted({p.repo for p in self.projects.values() if p.repo}):
             try:
-                self.token(repo)
+                self.token(repo)  # minting is the installation check, dry run included
                 gh = self.github_factory(repo)
-            except Exception as e:  # an uninstalled repo must not end the night: skip its work
+                open_prs = gh.open_prs(repo, self.cfg.identities.worker_github_login)
+                if not self.dry_run:
+                    self.repos.ensure_bare(repo, self.token(repo))
+                    self.repos.fetch(repo, self.token(repo))
+            except Exception as e:  # an uninstalled or unreachable repo must not end the night
                 self.report.uninstalled.append(repo)
-                self.log(f"{repo}: no installation token, skipping it tonight: {type(e).__name__}: {e}")
+                self.log(f"{repo}: unavailable, skipping it tonight: {type(e).__name__}: {e}")
                 continue
             self.installed.add(repo)
-            self._open[repo] = gh.open_prs(repo, self.cfg.identities.worker_github_login)
-            if not self.dry_run:
-                self.repos.ensure_bare(repo, self.token(repo))
-                self.repos.fetch(repo, self.token(repo))
+            self._open[repo] = open_prs
         # Neither starts a session, so neither waits for the policy check.
         self.merge_pass()
         self.ready_pass()

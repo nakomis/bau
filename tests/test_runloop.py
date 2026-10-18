@@ -1059,3 +1059,60 @@ def test_closing_a_too_big_pr_marks_not_bau(cfg, tmp_path):
         ),
         ("remove_labels", ("HOME-40", ["BAU"])),
     ]
+
+
+class InstalledOn(StubApp):
+    def __init__(self, *repos):
+        super().__init__()
+        self.repos = repos
+
+    def installation_token(self, repo):
+        if repo not in self.repos:
+            raise RuntimeError(f"no installation for {repo}")
+        return super().installation_token(repo)
+
+
+def test_first_projects_repo_uninstalled_still_runs_the_installed_repos_work(cfg, tmp_path):
+    first = "nakomis/aardvark"  # first in projects.yaml order and in sorted order
+    projects = {"AARD": ProjectConfig("AARD", first, False)} | PROJECTS
+    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [ready_verdict(item())]})
+    gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "green"})
+    runner = FakeRunner([SessionResult("done", "", good_rl(), 0.5, "Opened")], on_run=opens_pr(gh, pr()))
+    n = night(cfg, plane, gh, runner, FakeRepos(tmp_path), app=InstalledOn(REPO), projects=projects)
+    report = n.run()
+    assert report.stop_reason == "ok" and report.uninstalled == [first] and n.installed == {REPO}
+    assert report.prs_opened == 1
+
+
+def test_no_repo_minting_a_token_stops_the_night_at_preflight(cfg, tmp_path):
+    projects = {"AARD": ProjectConfig("AARD", "nakomis/aardvark", False)} | PROJECTS
+    runner = FakeRunner([])
+    report = night(
+        cfg, FakePlane({"HOME": [item()]}), FakeGitHub(), runner, FakeRepos(tmp_path),
+        app=InstalledOn(), projects=projects,
+    ).run()  # fmt: skip
+    assert report.stop_reason == "preflight: RuntimeError" and runner.briefs == []
+
+
+def test_a_repo_whose_fetch_fails_is_skipped_and_the_night_continues(cfg, tmp_path):
+    other = "nakomis/other"
+    projects = PROJECTS | {"OTHER": ProjectConfig("OTHER", other, False)}
+    items = [item(), item(ref="OTHER-1", desc=f"repo: {other}\nx")]
+    plane = FakePlane(
+        {"HOME": items[:1], "OTHER": items[1:]}, comments={i.ref: [ready_verdict(i)] for i in items}
+    )
+    gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "green"})
+    repos = FakeRepos(tmp_path)
+    original = repos.fetch
+
+    def fetch(repo, token):
+        if repo == other:
+            raise RuntimeError("git fetch failed")
+        original(repo, token)
+
+    repos.fetch = fetch
+    runner = FakeRunner([SessionResult("done", "", good_rl(), 0.5, "Opened")], on_run=opens_pr(gh, pr()))
+    n = night(cfg, plane, gh, runner, repos, projects=projects)
+    report = n.run()
+    assert report.stop_reason == "ok" and report.uninstalled == [other] and n.installed == {REPO}
+    assert other not in n._open and [b[0] for b in runner.briefs] == ["bau-home-42"]
