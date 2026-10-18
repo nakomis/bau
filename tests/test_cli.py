@@ -396,3 +396,30 @@ def test_hourly_snapshot_carries_uninstalled_forward(run_world, monkeypatch):
     assert run_world.cli.main(["snapshot", "--config", str(run_world.config_dir)]) == 0
     snap = read_snapshot(run_world.snapshot)
     assert snap["uninstalled"] == ["o/gone"] and snap["schema"] == 2
+
+
+def test_snapshot_rows_keeps_previous_questions_when_plane_fails():
+    from bau.config import ProjectConfig
+    from bau.snapshot import nudge
+
+    class DownPlane(FakePlane):
+        def list_items(self, ident, label):
+            raise RuntimeError("plane down")
+
+    old = {
+        "repo": "a/good", "ref": "HOME-5", "title": "T", "plane_url": "p", "repo_url": "u",
+        "asked_at": "a", "age_days": 9, "round": 1, "summary": "s", "questions": [],
+    }  # fmt: skip
+    other = {**old, "ref": "OTHER-1"}
+    projects = {"HOME": ProjectConfig("HOME", None, False)}
+    cfg = SimpleNamespace(
+        identities=SimpleNamespace(worker_github_login="bot", worker_plane_email="bau@nakomis.com")
+    )
+    logs = []
+    _, _, rows = snapshot_rows(
+        cfg, projects, DownPlane(), lambda r: None, lambda: NOW, log=logs.append,
+        previous_questions=[old, other],
+    )  # fmt: skip
+    assert [r.ref for r in rows] == ["HOME-5"] and rows[0].age_days == 9
+    assert nudge([], rows, NUDGE)["questions"] == "down"
+    assert logs

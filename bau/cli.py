@@ -113,7 +113,27 @@ def wire(cfg: Config, config_dir: Path):
     return projects, plane, app, factory, repos, clock
 
 
-def snapshot_rows(cfg: Config, projects, plane, factory, clock, log: Callable[..., None] = print):
+def _kept_questions(previous: list[dict], ident: str) -> list[QuestionRow]:
+    known = {f.name for f in fields(QuestionRow)}
+    kept = []
+    for r in previous:
+        if isinstance(r, dict) and str(r.get("ref", "")).rsplit("-", 1)[0] == ident:
+            try:
+                kept.append(QuestionRow(**{k: v for k, v in r.items() if k in known}))
+            except TypeError:
+                continue
+    return kept
+
+
+def snapshot_rows(
+    cfg: Config,
+    projects,
+    plane,
+    factory,
+    clock,
+    log: Callable[..., None] = print,
+    previous_questions: list[dict] | None = None,
+):
     open_rows: list[OpenPrRow] = []
     deploy_rows: list[DeployRow] = []
     question_rows: list[QuestionRow] = []
@@ -122,7 +142,8 @@ def snapshot_rows(cfg: Config, projects, plane, factory, clock, log: Callable[..
         try:
             question_rows.extend(_question_rows(cfg, ident, projects, plane, now, log))
         except Exception as e:
-            log(f"snapshot: skipping questions for {ident}: {e}")
+            log(f"snapshot: keeping the previous questions for {ident}: {e}")
+            question_rows.extend(_kept_questions(previous_questions or [], ident))
         if project.repo is None:
             continue
         try:
@@ -258,7 +279,9 @@ def _write_run_snapshot(
     )
     previous = read_snapshot(cfg.paths.snapshot) or {}
     open_rows, deploy_rows, question_rows = (
-        ([], [], []) if failed else snapshot_rows(cfg, projects, plane, factory, clock)
+        ([], [], [])
+        if failed
+        else snapshot_rows(cfg, projects, plane, factory, clock, previous_questions=previous.get("questions"))
     )
     data = build_snapshot(
         paused=paused,
@@ -334,7 +357,9 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 0
     if args.command == "snapshot":
         previous = read_snapshot(cfg.paths.snapshot) or {}
-        open_rows, deploy_rows, question_rows = snapshot_rows(cfg, projects, plane, factory, clock)
+        open_rows, deploy_rows, question_rows = snapshot_rows(
+            cfg, projects, plane, factory, clock, previous_questions=previous.get("questions")
+        )
         last = _last_run(previous.get("last_run"))
         write_snapshot(
             cfg.paths.snapshot,
