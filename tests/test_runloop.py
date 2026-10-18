@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from bau.config import Models, ProjectConfig
 from bau.github import PR, Thread, ThreadComment, Token
 from bau.markers import desc_hash, triage_comment
@@ -1248,3 +1250,38 @@ def test_other_authors_and_approved_reviews_start_no_session(cfg, tmp_path):
     runner = FakeRunner([])
     night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
     assert runner.briefs == []
+
+
+def test_abandon_with_failed_unlabel_is_not_repicked_next_night(cfg, tmp_path):
+    from bau.abandon import abandon
+
+    class StickyLabel(TriagedPlane):
+        def remove_labels(self, ref, names):
+            raise RuntimeError("plane down")
+
+    plane = StickyLabel({"HOME": [item()]})
+    gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "green"})
+    runner = FakeRunner(
+        [SessionResult("done", "", good_rl(), 0.5, "Opened https://x/pull/7")], on_run=opens_pr(gh, pr())
+    )
+    repos = FakeRepos(tmp_path)
+    assert night(cfg, plane, gh, runner, repos).run().sessions == 1
+
+    with pytest.raises(RuntimeError, match="plane down"):
+        abandon(
+            "HOME-42",
+            plane=plane,
+            github_factory=lambda repo: gh,
+            repos=repos,
+            projects=PROJECTS,
+            worker_login="nakomis-bau[bot]",
+            worker_email="bau@nakomis.com",
+        )
+    gh.open[REPO] = []  # the PR was closed before remove_labels failed
+    it = plane.get_item("HOME-42")
+    assert "BAU" in it.labels and "not-bau" in it.labels and it.state == "New"
+
+    plane.calls.clear()
+    report = night(cfg, plane, gh, runner, repos).run()
+    assert report.sessions == 0 and len(runner.briefs) == 1
+    assert not any(c[0] in ("set_state", "comment") and c[1][0] == "HOME-42" for c in plane.calls)

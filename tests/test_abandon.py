@@ -267,3 +267,23 @@ def test_abandon_without_any_repo_is_an_unknown_project(tmp_path: Path):
             worker_email="bau@nakomis.com",
         )
     assert plane.calls == []
+
+
+def test_pr_is_closed_before_the_abandon_comment(tmp_path: Path):
+    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    gh = FakeGitHub(open_prs={REPO: [make_pr()]})
+    run(plane, tmp_path, gh)
+    names = [c[0] for c in gh.calls]
+    assert names.index("close_pr") < names.index("comment")
+
+
+def test_failed_close_posts_no_pr_comment(tmp_path: Path):
+    class Boom(FakeGitHub):
+        def close_pr(self, repo, number):
+            raise RuntimeError("github down")
+
+    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    gh = Boom(open_prs={REPO: [make_pr()]})
+    with pytest.raises(RuntimeError):
+        run(plane, tmp_path, gh)
+    assert not any(c[0] == "comment" for c in gh.calls)

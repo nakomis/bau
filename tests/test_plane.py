@@ -264,3 +264,17 @@ def test_format_fills_state_group_and_updated_by():
     item = c.list_items("HOME", "BAU")[0]
     assert item.state_group == "unstarted"
     assert item.updated_by == "martin@nakomis.com"
+
+
+# Hand-written stand-in for Plane's stored comment_html; swap for a real capture from the API.
+PLANE_COMMENT_HTML = (
+    '<p>[bau:picked-up from=Ready] Working on branch <code class="inline-code">bau-15-x</code>'
+    ' in <strong class="bold">nakomis/bau</strong>.</p>'
+)
+
+
+def test_code_and_strong_with_attributes_keep_their_markup():
+    assert html_to_text(PLANE_COMMENT_HTML) == (
+        "[bau:picked-up from=Ready] Working on branch `bau-15-x` in **nakomis/bau**."
+    )
+    assert html_to_text("<codex>a</codex> <strongly>b</strongly>") == "a b"
