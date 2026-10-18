@@ -64,6 +64,7 @@ class LastRun:
     labelled_not_bau: int = 0
     triaged: int = 0
     asked: int = 0
+    atc: str = "ok"  # "stale" when the night ran on the cached copy of ATC's projects and priority
 
 
 def _level(count: int, oldest: int, warn_count: int, warn_days: int, down_count: int, down_days: int) -> str:

@@ -82,10 +82,10 @@ def questions_payload(n=1, **over):
     } | over
 
 
-def make_night(cfg, plane, runner, dry_run=False, paused=lambda: False):
+def make_night(cfg, plane, runner, dry_run=False, paused=lambda: False, projects=None, priority=None):
     n = Night(
         cfg,
-        PROJECTS,
+        PROJECTS if projects is None else projects,
         plane,
         None,
         None,
@@ -96,6 +96,7 @@ def make_night(cfg, plane, runner, dry_run=False, paused=lambda: False):
         oauth_token="oat",
         log=lambda *_: None,
         paused=paused,
+        **({"priority": priority} if priority is not None else {}),
     )
     n.report.latest = rl()
     return n
@@ -643,3 +644,21 @@ def test_failure_marker_from_someone_else_does_not_count(cfg):
     runner = FakeRunner([triage_result({"verdict": "ready", "reason": "r", "summary": "s"})])
     triage_pass(make_night(cfg, plane, runner))
     assert len(runner.briefs) == 1
+
+
+# -- ATC order (ATC-7) ------------------------------------------------------------
+def test_triage_runs_in_global_priority_order(cfg):
+    projects = {
+        "HOME": ProjectConfig("HOME", "nakomis/home-infra", True, ""),
+        "BAU": ProjectConfig("BAU", "nakomis/bau", False, ""),
+    }
+    plane = FakePlane({"HOME": [item("HOME-1"), item("HOME-2")], "BAU": [item("BAU-9")]})
+    n = make_night(
+        cfg, plane, FakeRunner([]), dry_run=True, projects=projects, priority={"BAU-9": 0, "HOME-1": 1}
+    )
+    triage_pass(n)
+    assert n.report.planned == [
+        "triage BAU-9 -> nakomis/bau",
+        "triage HOME-1 -> nakomis/home-infra",
+        "triage HOME-2 -> nakomis/home-infra",
+    ]

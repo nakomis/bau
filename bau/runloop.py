@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from bau.atc import priority_key
 from bau.checkout import Repos
 from bau.config import Config, Models, ProjectConfig
 from bau.feedback import (
@@ -103,6 +104,7 @@ class NightReport:
     triaged: int = 0
     asked: int = 0
     uninstalled: list[str] = field(default_factory=list)
+    atc: str = "ok"  # "stale" when ATC was unreachable and its cached copy was used
 
 
 class Night:
@@ -122,13 +124,17 @@ class Night:
         log: Callable[..., None] = print,
         sleep: Callable[[float], None] = time.sleep,
         paused: Callable[[], bool] | None = None,
+        priority: dict[str, int] | None = None,
+        atc: str = "ok",
     ):
         self.cfg, self.projects, self.plane, self.gh_app = cfg, projects, plane, gh_app
         self.github_factory, self.repos, self.runner, self.clock = github_factory, repos, runner, clock
         self.oauth_token, self.dry_run, self.log, self.sleep = oauth_token, dry_run, log, sleep
         self.paused = paused or (lambda: cfg.paused)
         self.policy = Policy(cfg.limits, cfg.schedule, clock)
-        self.report = NightReport()
+        self.report = NightReport(atc=atc)
+        # ATC's priority order (ref -> position); empty falls back to Plane priority, then age.
+        self.priority: dict[str, int] = priority or {}
         # Repos the GitHub App is installed on: every configured repo until run() has minted a token
         # for each; from then on only those that minted. Work on any other repo is skipped.
         self.installed: set[str] = {p.repo for p in projects.values() if p.repo}
@@ -303,6 +309,9 @@ class Night:
         """One Plane call, then GitHub tokens until one mints: an unreachable service ends the night
         with a snapshot that says so, rather than a crash part-way through. One repo without an
         installation is not an outage; the repo loop in run() skips it."""
+        if not self.projects:
+            self.log("preflight: ATC lists no BAU-enabled projects; nothing to do")
+            return True
         try:
             ident = next((i for i, p in self.projects.items() if p.repo), next(iter(self.projects)))
             self.plane._project(ident)
@@ -557,8 +566,7 @@ class Night:
         for ident in self.projects:
             candidates += self.plane.list_items(ident, "BAU")
         open_refs = {r for prs in self._open.values() for p in prs if (r := self.ref_of(p))}
-        order = {"urgent": 0, "high": 1, "medium": 2, "low": 3, None: 4, "none": 4}
-        for item in sorted(candidates, key=lambda i: (order.get(i.priority, 4), i.created_at)):
+        for item in sorted(candidates, key=lambda i: priority_key(i, self.priority)):
             if self.report.stop_reason != "ok":
                 return
             if any(label in NOT_PICKED_LABELS for label in item.labels):
@@ -612,7 +620,7 @@ class Night:
         if not repo:
             return True
         if repo not in known:
-            self.decline(item, f"repo override {repo} is not in projects.yaml")
+            self.decline(item, f"repo override {repo} is not a BAU project in ATC")
             return True
         if repo not in self.installed:
             self.log(f"{item.ref}: {repo} has no GitHub App installation; skipped tonight")

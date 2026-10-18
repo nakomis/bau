@@ -10,6 +10,7 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from bau.atc import priority_key
 from bau.markers import (
     TRIAGE_FAILED,
     VERDICTS,
@@ -226,49 +227,51 @@ def triage_pass(night: Night) -> None:
     from bau.runloop import model_for
 
     ids, limits = night.cfg.identities, night.cfg.limits
-    for ident in sorted(night.projects):
-        for it, repo, comments in _candidates(night, ident):
-            if night.dry_run:
-                night.report.planned.append(f"triage {it.ref} -> {repo}")
-                continue
-            if not night.may_start():
-                return
-            round = current_round(comments, ids.worker_plane_email)
-            brief = build_triage_brief(
-                it,
-                repo,
-                comments,
-                round=round,
-                limits=limits,
-                owner_email=ids.owner_plane_email,
-                worker_email=ids.worker_plane_email,
-            )
-            try:
-                with night.repos.scratch_clone(repo) as checkout:
-                    result = night.agent_session(
-                        name=f"bau-triage-{it.ref.lower()}",
-                        checkout=checkout,
-                        bare=None,
-                        brief=brief,
-                        model=model_for(it, night.cfg.models),
-                        log_name=f"triage-{it.ref}",
-                        github_token="",
-                        budget_usd=limits.triage_budget_usd,
-                        wall_clock_minutes=limits.triage_wall_clock_minutes,
-                    )
-            except Exception as e:  # a failed clone must not end the night
-                night.log(f"triage {it.ref}: could not run a session: {type(e).__name__}: {e}")
-                continue
-            if result.outcome == "rate_limited":
-                return
-            if result.outcome != "done":
-                _failed(night, it.ref, f"session ended with {result.outcome}: {result.reason}")
-                continue
-            parsed = parse_triage(result.result_text)
-            if parsed is None:
-                _failed(night, it.ref, "no valid verdict in the output")
-                continue
-            try:
-                _apply(night, it, round, parsed)
-            except Exception as e:
-                night.log(f"triage {it.ref}: could not record the verdict: {type(e).__name__}: {e}")
+    # One global order across projects (ATC's priority), not project by project.
+    candidates = [c for ident in night.projects for c in _candidates(night, ident)]
+    candidates.sort(key=lambda c: priority_key(c[0], night.priority))
+    for it, repo, comments in candidates:
+        if night.dry_run:
+            night.report.planned.append(f"triage {it.ref} -> {repo}")
+            continue
+        if not night.may_start():
+            return
+        round = current_round(comments, ids.worker_plane_email)
+        brief = build_triage_brief(
+            it,
+            repo,
+            comments,
+            round=round,
+            limits=limits,
+            owner_email=ids.owner_plane_email,
+            worker_email=ids.worker_plane_email,
+        )
+        try:
+            with night.repos.scratch_clone(repo) as checkout:
+                result = night.agent_session(
+                    name=f"bau-triage-{it.ref.lower()}",
+                    checkout=checkout,
+                    bare=None,
+                    brief=brief,
+                    model=model_for(it, night.cfg.models),
+                    log_name=f"triage-{it.ref}",
+                    github_token="",
+                    budget_usd=limits.triage_budget_usd,
+                    wall_clock_minutes=limits.triage_wall_clock_minutes,
+                )
+        except Exception as e:  # a failed clone must not end the night
+            night.log(f"triage {it.ref}: could not run a session: {type(e).__name__}: {e}")
+            continue
+        if result.outcome == "rate_limited":
+            return
+        if result.outcome != "done":
+            _failed(night, it.ref, f"session ended with {result.outcome}: {result.reason}")
+            continue
+        parsed = parse_triage(result.result_text)
+        if parsed is None:
+            _failed(night, it.ref, "no valid verdict in the output")
+            continue
+        try:
+            _apply(night, it, round, parsed)
+        except Exception as e:
+            night.log(f"triage {it.ref}: could not record the verdict: {type(e).__name__}: {e}")

@@ -166,5 +166,5 @@ The `rm` line stops launchd loading the jobs again at login.
 
 1. In GitHub, open Settings → Applications → Installed GitHub Apps → **nakomis-bau** → Configure, and tick the repository under "Only select repositories".
 2. Make sure `main` there is protected (a pull request is required and force pushes are blocked); BAU refuses unprotected repositories.
-3. Add the Plane project to `config/projects.yaml` with its repository, whether it deploys, and the deploy action.
+3. In ATC (`atc.plane.home.nakomis.com`, or the Plane MCP's `set_project_meta`), set the project's repository, whether it deploys and the deploy action, and turn on `bau_enabled`. BAU reads this at the start of each run.
 4. Add `bau@nakomis.com` to that Plane project as a member.

@@ -9,6 +9,7 @@ Overnight BAU maintenance worker: Plane items in, pull requests out. Spec:
 - Host-side code (`bau/`) runs on Cere as `nakomis`; the agent runs inside `container/`. The agent never talks to Plane.
 - Every write to Plane or GitHub happens through `bau/plane.py` and `bau/github.py`, driven from `bau/runloop.py`, `bau/abandon.py`, `bau/sweep.py`, `bau/triage.py` or `bau/answers.py`; nothing else writes.
 - Policy constants live in `config/bau.yaml`, never in code. Tests build explicit `Limits(...)`.
+- The project list (repo, deploys, deploy action) and the order of work come from ATC (`bau/atc.py`: `GET /api/projects?bau_enabled=true`, `GET /api/priority`), cached at `paths.atc_cache`; change a project's BAU settings in ATC, not here. `config/projects.yaml` is no longer read (kept until the ATC plan's Task 16 removes it). The per-ticket `repo:` override stays in BAU. Tests use a fake ATC (`httpx.MockTransport`, see `tests/test_atc.py`).
 - Secrets come from the macOS login keychain, service `bau` (`bau/secrets.py`); never from files in the repo.
 - Always work on a feature branch and open a PR. Branch and PR title carry the Plane ref, e.g. `bau-3-config` and `feat: config loading (BAU-3)`.
 - British English throughout. No attribution lines in commits.
@@ -19,7 +20,7 @@ Overnight BAU maintenance worker: Plane items in, pull requests out. Spec:
 |------|---------|
 | `bau/` | Host-side Python |
 | `container/` | Agent image, egress proxy compose |
-| `config/` | `bau.yaml`, `projects.yaml` |
+| `config/` | `bau.yaml` (`projects.yaml` is unused, pending removal) |
 | `launchd/` | Scheduled jobs |
 | `web/` | Dashboard |
 | `tests/` | pytest, with fakes under `tests/fakes/` |

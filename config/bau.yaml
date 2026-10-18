@@ -73,6 +73,13 @@ paths:
   logs: /Users/nakomis/bau/logs
   snapshot: /Users/nakomis/bau/state.json
   pause_file: /Users/nakomis/bau/paused
+  # Last good copy of ATC's project list and priority, used when ATC is unreachable.
+  atc_cache: /Users/nakomis/bau/atc-cache.json
+
+# ATC (nakomis/atc) supplies the BAU-enabled projects and the order work is done in.
+# Reached through Leia's mTLS with the Plane client certificate above.
+atc:
+  url: https://atc.plane.home.nakomis.com
 
 container:
   image: bau-agent:latest

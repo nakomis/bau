@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from bau.config import Limits, Nudge, ProjectConfig, load_config, load_projects, paused_reader
+from bau.config import AtcConfig, Limits, Nudge, ProjectConfig, load_config, load_projects, paused_reader
 
 MINIMAL = """
 paused: false
@@ -30,7 +30,8 @@ plane: {url: https://plane.home.nakomis.com, workspace: nakomis,
 claude: {oauth_token: {service: bau, account: claude-oauth-token}}
 paths: {repos: /Users/nakomis/bau/repos, work: /Users/nakomis/bau/work,
         logs: /Users/nakomis/bau/logs, snapshot: /Users/nakomis/bau/state.json,
-        pause_file: /Users/nakomis/bau/paused}
+        pause_file: /Users/nakomis/bau/paused, atc_cache: /Users/nakomis/bau/atc-cache.json}
+atc: {url: https://atc.plane.home.nakomis.com/}
 container: {image: bau-agent:latest, network: bau-net, proxy: http://bau-egress:8888}
 """
 
@@ -49,6 +50,8 @@ def test_loads_every_section(tmp_path: Path):
     assert cfg.paths.snapshot == Path("/Users/nakomis/bau/state.json")
     assert cfg.paths.pause_file == Path("/Users/nakomis/bau/paused")
     assert cfg.container.proxy == "http://bau-egress:8888"
+    assert cfg.atc == AtcConfig("https://atc.plane.home.nakomis.com")
+    assert cfg.paths.atc_cache == Path("/Users/nakomis/bau/atc-cache.json")
 
 
 def test_load_config_reads_nudge_and_new_limits(tmp_path: Path):
@@ -193,3 +196,9 @@ def test_projects_yaml_deploys_flags_match_the_workflows():
         assert not projects[ident].deploys, ident
     assert "promote" in projects["BAPP"].deploy_action
     assert projects["SCRUM"].deploy_action == "Run the promote-prod workflow in GitHub Actions"
+
+
+def test_real_bau_yaml_points_at_atc():
+    cfg = load_config(Path(__file__).parent.parent / "config" / "bau.yaml")
+    assert cfg.atc.url == "https://atc.plane.home.nakomis.com"
+    assert cfg.paths.atc_cache == Path("/Users/nakomis/bau/atc-cache.json")

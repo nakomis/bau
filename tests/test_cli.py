@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from bau.atc import AtcState, AtcUnavailable
 from bau.cli import ClientFactory, build_parser, exit_code, snapshot_rows
 from bau.config import Nudge
 from bau.github import Token
@@ -36,6 +37,7 @@ def test_abnormal_stop_reasons_exit_one(reason):
 
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
 NUDGE = Nudge(5, 5, 10, 14, 5, 3, 10, 7)
+FRESH = AtcState({}, {}, False)
 
 
 class FakePr:
@@ -127,7 +129,7 @@ def test_snapshot_ignores_unknown_last_run_keys(tmp_path, monkeypatch):
         paused=False, paths=SimpleNamespace(snapshot=snap, pause_file=tmp_path / "paused"), nudge=NUDGE
     )
     monkeypatch.setattr(cli, "load_config", lambda p: cfg)
-    monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW))
+    monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW, FRESH))
     assert cli.main(["snapshot"]) == 0
     assert read_snapshot(snap)["last_run"]["started"] == "s"
 
@@ -190,7 +192,7 @@ def run_world(tmp_path, monkeypatch):
     )
     StubNight.instances, StubNight.outcome = [], None
     monkeypatch.setattr(cli, "load_config", lambda p: cfg)
-    monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW))
+    monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW, FRESH))
     monkeypatch.setattr(cli, "read_secret", lambda ref: "oat")
     monkeypatch.setattr(cli, "SessionRunner", lambda c, **kw: SimpleNamespace(cfg=c, **kw))
     monkeypatch.setattr(cli, "snapshot_rows", lambda *a, **k: ([], [], []))
@@ -285,7 +287,7 @@ def test_cli_abandon_invalid_ref_exits_2(capsys):
         identities=SimpleNamespace(worker_github_login="w", worker_plane_email="e"),
         paths=SimpleNamespace(logs=Path("/nonexistent/logs")),
     )
-    assert _abandon(args, cfg, ({}, P(), None, None, None, None)) == 2
+    assert _abandon(args, cfg, ({}, P(), None, None, None, None, FRESH)) == 2
     assert "invalid ref" in capsys.readouterr().out
 
 
@@ -441,3 +443,90 @@ def test_snapshot_rows_keeps_previous_questions_when_plane_fails():
 def test_sweep_subcommand_is_gone():
     with pytest.raises(SystemExit):
         build_parser().parse_args(["sweep"])
+
+
+# -- ATC (ATC-7) -------------------------------------------------------------------
+def test_run_passes_atc_priority_and_staleness_to_the_night(run_world, monkeypatch):
+    from bau.snapshot import read_snapshot
+
+    stale = AtcState({}, {"HOME-1": 0}, True)
+    monkeypatch.setattr(run_world.cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW, stale))
+
+    def run(self):
+        self.report.atc = self.kwargs["atc"]
+        return self.report
+
+    monkeypatch.setattr(StubNight, "run", run)
+    assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
+    kwargs = StubNight.instances[0].kwargs
+    assert kwargs["priority"] == {"HOME-1": 0} and kwargs["atc"] == "stale"
+    assert read_snapshot(run_world.snapshot)["last_run"]["atc"] == "stale"
+
+
+def test_run_without_atc_or_cache_stops_preflight_atc(run_world, monkeypatch):
+    from bau.snapshot import read_snapshot
+
+    previous = {"open_prs": [{"ref": "HOME-1"}], "questions": [], "deploy_pending": []}
+    run_world.snapshot.write_text(__import__("json").dumps(previous))
+    run_world.cfg.schedule = SimpleNamespace(timezone="Europe/London")
+
+    def down(c, d):
+        raise AtcUnavailable("ATC GET /api/projects: 502")
+
+    monkeypatch.setattr(run_world.cli, "wire", down)
+    assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == exit_code("preflight: atc")
+    snap = read_snapshot(run_world.snapshot)
+    assert snap["last_run"]["stop_reason"] == "preflight: atc"
+    assert snap["open_prs"] == [{"ref": "HOME-1"}]  # kept: no service was touched
+    assert StubNight.instances == []
+
+
+def test_dry_run_without_atc_says_so_and_writes_nothing(run_world, monkeypatch, capsys):
+    def down(c, d):
+        raise AtcUnavailable("no route")
+
+    monkeypatch.setattr(run_world.cli, "wire", down)
+    assert run_world.cli.main(["run", "--dry-run", "--config", str(run_world.config_dir)]) == 1
+    assert "preflight: atc" in capsys.readouterr().out
+    assert not run_world.snapshot.exists()
+
+
+def test_locked_out_without_atc_still_records_locked(run_world, monkeypatch):
+    import fcntl
+
+    from bau.snapshot import read_snapshot
+
+    run_world.cfg.schedule = SimpleNamespace(timezone="Europe/London")
+
+    def down(c, d):
+        raise AtcUnavailable("no route")
+
+    monkeypatch.setattr(run_world.cli, "wire", down)
+    monkeypatch.setattr(run_world.cli, "RUN_LOCK_WAIT", 0)
+    lock = run_world.cfg.paths.logs.parent / "run.lock"
+    with open(lock, "a") as held:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
+    assert read_snapshot(run_world.snapshot)["last_run"]["stop_reason"] == "locked"
+
+
+def test_wire_reads_projects_and_priority_from_atc(tmp_path, monkeypatch, cfg):
+
+    from bau import cli
+    from tests.test_atc import P_BAU, P_HOME, fake_atc
+
+    made = []
+    real = cli.AtcClient
+
+    def client(url, cert, key):
+        made.append((url, cert, key))
+        return real(url, cert, key, transport=fake_atc(projects=[P_HOME, P_BAU], refs=["BAU-2"]))
+
+    monkeypatch.setattr(cli, "AtcClient", client)
+    monkeypatch.setattr(cli, "read_secret", lambda ref: "secret")
+    monkeypatch.setattr(cli, "GitHubApp", lambda *a: SimpleNamespace())
+    monkeypatch.setattr(cli, "PlaneClient", lambda *a: SimpleNamespace())
+    projects, plane, app, factory, repos, clock, atc = cli.wire(cfg, tmp_path)
+    assert list(projects) == ["HOME", "BAU"] and atc.priority == {"BAU-2": 0} and not atc.stale
+    assert made == [("https://atc.plane.home.nakomis.com", cfg.plane.client_cert, cfg.plane.client_key)]
+    assert cfg.paths.atc_cache.exists()

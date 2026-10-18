@@ -1,3 +1,5 @@
+# NO LONGER READ (ATC-7): BAU takes its projects from ATC's API (GET /api/projects?bau_enabled=true).
+# Kept only as the seed for ATC's one-off import; removed after BAU's first good night on ATC.
 # Plane project identifier -> GitHub repo. A ticket may override with a
 # `repo: nakomis/<name>` line in its description.
 projects:
