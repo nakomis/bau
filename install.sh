@@ -18,7 +18,7 @@ if [ -f web/package.json ]; then
 else
   echo "WARNING: web/package.json missing; skipping the dashboard build"
 fi
-for label in bau-run bau-snapshot bau-sweep bau-api; do
+for label in bau-run bau-snapshot bau-api; do
   if [ "$label" = bau-api ] && ! security find-generic-password -s bau -a proxy-token >/dev/null 2>&1; then
     echo "!!! SKIPPING com.nakomis.bau-api: keychain item bau/proxy-token is missing."
     echo "!!! Add it (security add-generic-password -s bau -a proxy-token -w) and re-run install.sh."
@@ -30,6 +30,11 @@ for label in bau-run bau-snapshot bau-sweep bau-api; do
   launchctl bootout "gui/$(id -u)/com.nakomis.$label" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$plist"
 done
+old_sweep="$HOME/Library/LaunchAgents/com.nakomis.bau-sweep.plist"
+if [ -f "$old_sweep" ]; then
+  launchctl bootout "gui/$(id -u)/com.nakomis.bau-sweep" 2>/dev/null || true
+  rm -f "$old_sweep"
+fi
 for item in plane-api-key github-app-key claude-oauth-token proxy-token; do
   security find-generic-password -s bau -a "$item" >/dev/null 2>&1 || echo "WARNING: keychain item bau/$item missing"
 done

@@ -423,3 +423,8 @@ def test_snapshot_rows_keeps_previous_questions_when_plane_fails():
     assert [r.ref for r in rows] == ["HOME-5"] and rows[0].age_days == 9
     assert nudge([], rows, NUDGE)["questions"] == "down"
     assert logs
+
+
+def test_sweep_subcommand_is_gone():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["sweep"])

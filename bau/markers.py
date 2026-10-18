@@ -80,14 +80,11 @@ def triage_comment(verdict: str, round: int, desc: str, reason_said: str) -> str
 
 
 def questions_comment(round: int, summary: str, questions: list[Question]) -> str:
-    paras = [
-        f"{q.text}\nRecommended: {q.recommendation}\nWhy: {q.why}" for q in questions
-    ]
+    paras = [f"{q.text}\nRecommended: {q.recommendation}\nWhy: {q.why}" for q in questions]
     payload = {
         "summary": summary,
         "questions": [
-            {"id": q.id, "text": q.text, "recommendation": q.recommendation, "why": q.why}
-            for q in questions
+            {"id": q.id, "text": q.text, "recommendation": q.recommendation, "why": q.why} for q in questions
         ],
     }
     marker = f"[bau:questions round={round} data={_encode(payload)}]"
