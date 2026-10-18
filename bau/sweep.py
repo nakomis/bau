@@ -102,13 +102,13 @@ def build_sweep_brief(identifier: str, items: list[Item], nonce: str | None = No
     return "\n".join(parts), refs
 
 
-def _clean_reason(value: object) -> str:
+def _clean_reason(value: object, limit: int = 200) -> str:
     """One plain line that cannot forge a marker or carry a link: no markdown links, no heading marks,
-    no brackets (clean_note), no URL schemes."""
+    no brackets (clean_note), no URL schemes. At most `limit` characters (clean_note caps at 500)."""
     text = MD_LINK.sub(r"\1", str(value))
     parts = (line.strip().lstrip("#").strip() for line in text.splitlines())
     line = clean_note(" ".join(p for p in parts if p))
-    return URL_SCHEME.sub("", line)[:200]
+    return URL_SCHEME.sub("", line)[:limit]
 
 
 def _said(reason: str, who: str = "sweep agent") -> str:

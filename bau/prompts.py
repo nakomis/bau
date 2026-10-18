@@ -64,7 +64,9 @@ Rules:
  "summary": "one or two sentences: what is clear and what is missing",
  "questions": [{{"id": "q1", "text": "...", "recommendation": "...", "why": "..."}}]}}
 ```
-  "questions" holds one to five entries for a questions verdict and is left out otherwise.
+  "questions" holds one to five entries for a questions verdict and is left out otherwise. The
+  summary and each question's text, recommendation and why must each be at most 500 characters;
+  a longer one makes the whole verdict invalid.
 """
 
 DELIMITERS = ("<<<", ">>>", "===")

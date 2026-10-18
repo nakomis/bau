@@ -119,6 +119,9 @@ def test_round_line():
         (item(desc="Fix the other thing."), [verdict("ready")], True),
         (item(), [verdict("questions"), answers()], True),
         (item(labels=("BAU", "bau-questions")), [], False),
+        (item(labels=("BAU", "bau-questions")), [verdict("questions")], False),
+        (item(labels=("BAU", "bau-questions"), desc="Edited."), [verdict("questions")], True),
+        (item(labels=("BAU", "bau-questions", "blocked"), desc="Edited."), [verdict("questions")], False),
         (item(labels=("BAU", "not-bau")), [], False),
         (item(labels=("BAU", "blocked")), [], False),
         (item(labels=()), [], False),
@@ -158,6 +161,8 @@ def test_newer_is_by_comment_order_not_timestamp():
 def test_current_round_counts_answers():
     assert current_round([], WORKER) == 1
     assert current_round([answers(1), answers(2)], WORKER) == 3
+    # A double-submitted answers comment must not skip a round.
+    assert current_round([answers(1), answers(1)], WORKER) == 2
 
 
 # -- parsing -----------------------------------------------------------------
@@ -311,7 +316,7 @@ def test_triage_pass_too_big_marks_not_bau(cfg):
         cfg, plane, FakeRunner([triage_result({"verdict": "too_big", "reason": "epic", "summary": "s"})])
     )
     triage_pass(n)
-    assert [c[0] for c in plane.calls] == ["remove_labels", "add_labels", "comment"]
+    assert [c[0] for c in plane.calls] == ["add_labels", "comment", "remove_labels"]
     assert ("remove_labels", ("HOME-1", ["BAU"])) in plane.calls
     assert ("add_labels", ("HOME-1", ["not-bau"])) in plane.calls
     assert posted(plane)[0].startswith("[bau:triage verdict=too_big round=1")
@@ -451,7 +456,7 @@ def test_failed_questions_comment_takes_the_label_back(cfg):
 
 def test_description_edited_after_questions_triages_again(cfg):
     old = [wc(questions_comment(1, "s", QS)), verdict("questions", desc="Old text.")]
-    plane = FakePlane({"HOME": [item()]}, {"HOME-1": old})
+    plane = FakePlane({"HOME": [item(labels=("BAU", "bau-questions"))]}, {"HOME-1": old})
     n = make_night(
         cfg, plane, FakeRunner([triage_result({"verdict": "ready", "reason": "r", "summary": "s"})])
     )
@@ -492,3 +497,59 @@ def test_failed_clone_does_not_end_the_night(cfg):
     n.repos.scratch_clone = flaky
     triage_pass(n)
     assert posted(plane, "HOME-1") == [] and len(posted(plane, "HOME-2")) == 1 and n.report.triaged == 1
+
+
+def test_description_edited_then_asked_again_keeps_the_label(cfg):
+    old = [wc(questions_comment(1, "s", QS)), verdict("questions", desc="Old text.")]
+    plane = FakePlane({"HOME": [item(labels=("BAU", "bau-questions"))]}, {"HOME-1": old})
+    n = make_night(cfg, plane, FakeRunner([triage_result(questions_payload(1))]))
+    triage_pass(n)
+    assert plane.get_item("HOME-1").labels == ["BAU", "bau-questions"]
+    asked = latest_asked(plane.comments("HOME-1"), WORKER)
+    assert asked is not None and asked.questions[0].text == "Which 1?" and n.report.asked == 1
+    assert not needs_triage(plane.get_item("HOME-1"), plane.comments("HOME-1"), WORKER)
+
+
+def test_description_edited_then_too_big_drops_both_labels(cfg):
+    old = [wc(questions_comment(1, "s", QS)), verdict("questions", desc="Old text.")]
+    plane = FakePlane({"HOME": [item(labels=("BAU", "bau-questions"))]}, {"HOME-1": old})
+    payload = {"verdict": "too_big", "reason": "epic", "summary": "s"}
+    triage_pass(make_night(cfg, plane, FakeRunner([triage_result(payload)])))
+    assert plane.get_item("HOME-1").labels == ["not-bau"]
+
+
+@pytest.mark.parametrize("broken", ["add_labels", "comment"])
+def test_too_big_partial_write_leaves_the_item_held(cfg, broken):
+    plane = FakePlane({"HOME": [item()]})
+    setattr(plane, broken, lambda *a: (_ for _ in ()).throw(RuntimeError("down")))
+    payload = {"verdict": "too_big", "reason": "epic", "summary": "s"}
+    triage_pass(make_night(cfg, plane, FakeRunner([triage_result(payload)])))
+    # Never lost: BAU stays until not-bau and the verdict are both written.
+    assert "BAU" in plane.get_item("HOME-1").labels
+    assert not [c for c in plane.calls if c[0] == "remove_labels"]
+
+
+@pytest.mark.parametrize("field", ["text", "recommendation", "why", "summary"])
+def test_parse_triage_rejects_over_long_fields(field):
+    payload = questions_payload(1)
+    if field == "summary":
+        payload["summary"] = "x" * 501
+    else:
+        payload["questions"][0][field] = "x" * 501
+    assert parse_triage(fenced(payload)) is None
+    payload = questions_payload(1)
+    if field == "summary":
+        payload["summary"] = "x" * 500
+    else:
+        payload["questions"][0][field] = "x" * 500
+    got = parse_triage(fenced(payload))
+    assert got is not None
+    value = got.summary if field == "summary" else getattr(got.questions[0], field)
+    assert len(value) == 500
+
+
+def test_triage_prompt_states_the_field_limit(cfg):
+    brief = build_triage_brief(
+        item(), "r/x", [], round=1, limits=cfg.limits, owner_email=OWNER, worker_email=WORKER
+    )
+    assert "500 characters" in brief

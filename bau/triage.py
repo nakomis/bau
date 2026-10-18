@@ -27,8 +27,9 @@ from bau.sweep import JSON_BLOCK, _clean_reason, _said
 if TYPE_CHECKING:
     from bau.runloop import Night
 
-HOLD_LABELS = ("bau-questions", "not-bau", "blocked")
+NEVER_TRIAGE = ("not-bau", "blocked")
 MAX_QUESTIONS = 5
+MAX_FIELD_CHARS = 500  # stated in TRIAGE_PROMPT; longer text is rejected, never cut short
 QUESTION_FIELDS = ("id", "text", "recommendation", "why")
 SPEAKER = "triage agent"
 
@@ -42,7 +43,8 @@ class TriageResult:
 
 
 def current_round(comments: list[Comment], worker_email: str) -> int:
-    return len(answered(comments, worker_email)) + 1
+    """Distinct answered rounds, so a double-submitted answers comment cannot skip a round."""
+    return len({a.round for a in answered(comments, worker_email)}) + 1
 
 
 def _verdict_and_later_answers(comments: list[Comment], worker_email: str) -> tuple[Verdict | None, bool]:
@@ -58,10 +60,14 @@ def _verdict_and_later_answers(comments: list[Comment], worker_email: str) -> tu
 
 
 def needs_triage(item: Item, comments: list[Comment], worker_email: str) -> bool:
-    if "BAU" not in item.labels or any(label in HOLD_LABELS for label in item.labels):
+    if "BAU" not in item.labels or any(label in NEVER_TRIAGE for label in item.labels):
         return False
     verdict, answered_since = _verdict_and_later_answers(comments, worker_email)
-    return verdict is None or verdict.desc != desc_hash(item.description) or answered_since
+    stale = verdict is not None and verdict.desc != desc_hash(item.description)
+    if "bau-questions" in item.labels:
+        # Waiting for Martin, unless the description changed under the questions: ask afresh.
+        return stale and verdict is not None and verdict.verdict == "questions"
+    return verdict is None or stale or answered_since
 
 
 def ready_for_pickup(item: Item, comments: list[Comment], worker_email: str) -> bool:
@@ -75,18 +81,26 @@ def ready_for_pickup(item: Item, comments: list[Comment], worker_email: str) -> 
 
 
 def _text(value: object) -> str | None:
-    """Agent text made safe for Plane, or None when it is not a non-blank string."""
+    """The reason made safe for Plane, or None when it is not a non-blank string."""
     if not isinstance(value, str):
         return None
     cleaned = _clean_reason(value)
     return cleaned if cleaned.strip() else None
 
 
+def _field(value: object) -> str | None:
+    """A summary or question field made safe for Plane; None when not a string or over the limit.
+    Cleaning only ever shortens text, so the length check on the raw text bounds the cleaned text."""
+    if not isinstance(value, str) or len(" ".join(value.split())) > MAX_FIELD_CHARS:
+        return None
+    return _clean_reason(value, MAX_FIELD_CHARS)
+
+
 def _question(raw: object) -> Question | None:
     if not isinstance(raw, dict):
         return None
-    fields = [_text(raw.get(k)) for k in QUESTION_FIELDS]
-    if any(f is None for f in fields):
+    fields = [_field(raw.get(k)) for k in QUESTION_FIELDS]
+    if any(not f for f in fields):
         return None
     return Question(*fields)  # type: ignore[arg-type]
 
@@ -104,10 +118,9 @@ def parse_triage(text: str) -> TriageResult | None:
         return None
     verdict = data["verdict"]
     reason = _text(data.get("reason"))
-    summary = data.get("summary", "")
-    if reason is None or not isinstance(summary, str):
+    summary = _field(data.get("summary", ""))
+    if reason is None or summary is None:
         return None
-    summary = _clean_reason(summary)
     raw_questions = data.get("questions")
     if verdict != "questions":
         if raw_questions:
@@ -126,7 +139,12 @@ def _apply(night: Night, item: Item, round: int, result: TriageResult) -> None:
     desc = desc_hash(item.description)
     said = _said(result.reason, SPEAKER)
     limit = night.cfg.limits.max_question_rounds
+    waiting = "bau-questions" in item.labels
     if result.verdict == "ready":
+        # Label off first: a ready verdict left beside bau-questions would hold the item for ever,
+        # whereas a missing verdict just means triage runs again (the description hash is stale).
+        if waiting:
+            plane.remove_labels(ref, ["bau-questions"])
         plane.comment(ref, triage_comment("ready", round, desc, said))
     elif result.verdict == "questions" and round <= limit:
         plane.add_labels(ref, ["bau-questions"])
@@ -142,9 +160,10 @@ def _apply(night: Night, item: Item, round: int, result: TriageResult) -> None:
     else:
         if result.verdict == "questions":
             said += f" (all {limit} rounds of questions were used, so this counts as too big)"
-        plane.remove_labels(ref, ["BAU"])
+        # not-bau and the verdict first: a failure part-way leaves the item held, never unlabelled.
         plane.add_labels(ref, ["not-bau"])
         plane.comment(ref, triage_comment("too_big", round, desc, said))
+        plane.remove_labels(ref, ["BAU", "bau-questions"] if waiting else ["BAU"])
     night.report.triaged += 1
 
 
@@ -154,7 +173,7 @@ def _candidates(night: Night, ident: str) -> list[tuple[Item, str, list[Comment]
     worker = night.cfg.identities.worker_plane_email
     out = []
     for it in night.plane.list_items(ident, "BAU"):
-        if any(label in HOLD_LABELS for label in it.labels):  # cheap check before fetching comments
+        if any(label in NEVER_TRIAGE for label in it.labels):  # cheap check before fetching comments
             continue
         repo = repo_for(it, night.projects)
         if repo is None or repo not in night.installed:
