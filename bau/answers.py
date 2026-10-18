@@ -25,6 +25,12 @@ class MissingAnswer(ValueError):
     pass
 
 
+def clean_answer(text: str) -> str:
+    """Keep Martin's line breaks, but no bracket characters: an answer must never forge a [bau:...] marker."""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    return "\n".join(line.rstrip() for line in lines).strip().replace("[", "(").replace("]", ")")
+
+
 def _check_ref(ref: str, projects: dict[str, ProjectConfig]) -> str:
     ref = ref.strip()
     if not REF_PATTERN.match(ref):
@@ -72,10 +78,10 @@ def submit_answers(
         cleaned = []
         for q in asked.questions:
             a = by_id[q.id]
-            text = clean_note(a.text)
+            text = clean_answer(a.text)
             if not text:
                 raise MissingAnswer(f"question {q.id} has no answer")
-            if a.accepted and text != clean_note(q.recommendation):
+            if a.accepted and text != clean_answer(q.recommendation):
                 raise MissingAnswer(f"question {q.id} accepts a recommendation it was not given")
             cleaned.append(Answer(q.id, a.accepted, text))
         plane.comment(ref, answers_comment(asked.round, asked.questions, cleaned))
@@ -96,10 +102,10 @@ def mark_not_bau(
     note = clean_note(note)
 
     def go() -> None:
-        # not-bau before BAU comes off: a failure between the two must not leave the item unlabelled.
+        # not-bau, then the audit comment, then BAU comes off: a failure part-way never leaves a relabel untraced.
         plane.add_labels(ref, ["not-bau"])
-        plane.remove_labels(ref, ["BAU", WAITING])
         suffix = f" Note: {note}" if note else ""
         plane.comment(ref, "[bau] Marked not-bau by Martin from the BAU dashboard." + suffix)
+        plane.remove_labels(ref, ["BAU", WAITING])
 
     _locked(lock_path, go)

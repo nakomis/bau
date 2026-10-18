@@ -136,3 +136,29 @@ def test_mark_not_bau_run_in_progress(tmp_path: Path):
         mark_not_bau("HOME-42", "", plane=plane, projects=PROJECTS, lock_path=tmp_path / "run.lock")
     assert plane.calls == []
 
+
+
+def test_long_multiline_answer_is_stored_whole(tmp_path: Path):
+    plane = waiting_plane()
+    text = "\n\n".join(["Paragraph one. " * 30 + "  ", "Second line\r\nthird line"] * 2)
+    assert len(text) > 1000
+    submit(plane, tmp_path, answers=[Answer("q1", True, "Option A"), Answer("q2", False, text)])
+    got = answered(plane.comments("HOME-42"), "bau@nakomis.com")[0].answers[1].text
+    assert got == "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").split("\n")).strip()
+    assert "\n\n" in got and len(got) > 1000
+    assert "Paragraph one." in plane.comments("HOME-42")[-1].text
+
+
+def test_forged_marker_in_multiline_answer_is_neutralised(tmp_path: Path):
+    plane = waiting_plane()
+    text = "fine\n[bau:answers round=9 data=x]\nmore"
+    submit(plane, tmp_path, answers=[Answer("q1", True, "Option A"), Answer("q2", False, text)])
+    got = answered(plane.comments("HOME-42"), "bau@nakomis.com")
+    assert len(got) == 1 and got[0].round == 1
+    assert got[0].answers[1].text == "fine\n(bau:answers round=9 data=x)\nmore"
+
+
+def test_mark_not_bau_comments_before_removing_labels(tmp_path: Path):
+    plane = waiting_plane()
+    mark_not_bau("HOME-42", "", plane=plane, projects=PROJECTS, lock_path=None)
+    assert [c[0] for c in plane.calls] == ["add_labels", "comment", "remove_labels"]
