@@ -102,7 +102,7 @@ def mark_not_bau(
     note = clean_note(note)
 
     def go() -> None:
-        # not-bau, then the audit comment, then BAU comes off: a failure part-way never leaves a relabel untraced.
+        # not-bau, audit comment, then BAU comes off: a failure part-way never leaves a relabel untraced.
         plane.add_labels(ref, ["not-bau"])
         suffix = f" Note: {note}" if note else ""
         plane.comment(ref, "[bau] Marked not-bau by Martin from the BAU dashboard." + suffix)

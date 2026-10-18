@@ -140,12 +140,12 @@ def test_mark_not_bau_run_in_progress(tmp_path: Path):
 
 def test_long_multiline_answer_is_stored_whole(tmp_path: Path):
     plane = waiting_plane()
-    text = "\n\n".join(["Paragraph one. " * 30 + "  ", "Second line\r\nthird line"] * 2)
-    assert len(text) > 1000
+    text = "\n\n".join(["Paragraph one. " * 50 + "  ", "Second line\r\nthird line"] * 2)
+    assert len(text) > 1500
     submit(plane, tmp_path, answers=[Answer("q1", True, "Option A"), Answer("q2", False, text)])
     got = answered(plane.comments("HOME-42"), "bau@nakomis.com")[0].answers[1].text
     assert got == "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").split("\n")).strip()
-    assert "\n\n" in got and len(got) > 1000
+    assert "\n\n" in got and len(got) > 1500
     assert "Paragraph one." in plane.comments("HOME-42")[-1].text
 
 
