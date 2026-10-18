@@ -3,3 +3,40 @@
 projects:
   BAU:   {repo: nakomis/bau,          deploys: false, deploy_action: ""}
   HOME:  {repo: nakomis/home-infra,   deploys: true,  deploy_action: "Run the relevant playbook: scripts/{leia,luke,mace,cere,mac}-ansible.sh"}
+  # Every Plane project with a code repo. deploys: true only where the repo has a
+  # workflow whose name contains 'deploy'; checked with gh on 18 Oct 2026.
+  ADMIN: {repo: nakomis/nakom-admin,             deploys: false, deploy_action: ""}
+  BAPP:  {repo: nakomis/blog-app,                deploys: false, deploy_action: ""}
+  BOOT:  {repo: nakomis/bootboots,               deploys: false, deploy_action: ""}
+  CHATS: {repo: nakomis/claude-chats,            deploys: false, deploy_action: ""}
+  CLOUD: {repo: nakomis/nakomis-infra,           deploys: false, deploy_action: ""}
+  CRYPT: {repo: nakomis/tinycrypt,               deploys: false, deploy_action: ""}
+  CSSC:  {repo: nakomis/cdk-ssm-secret-checker,  deploys: false, deploy_action: ""}
+  CTHU:  {repo: nakomis/cthulhu,                 deploys: false, deploy_action: ""}
+  EYE:   {repo: nakomis/mcps,                    deploys: false, deploy_action: ""}
+  FLEET: {repo: nakomis/nakomis-fleet,           deploys: false, deploy_action: ""}
+  HAND:  {repo: nakomis/handmade-intelligence,   deploys: false, deploy_action: ""}
+  KAPPA: {repo: nakomis/kappa-warmer,            deploys: false, deploy_action: ""}
+  KBRD:  {repo: nakomis/mechanical-keyboard,     deploys: false, deploy_action: ""}
+  LAPC:  {repo: nakomis/lapcat,                  deploys: false, deploy_action: ""}
+  LIGHT: {repo: nakomis/lightning,               deploys: false, deploy_action: ""}
+  MUSH:  {repo: nakomis/mushroom-humidor,        deploys: false, deploy_action: ""}
+  NAKIS: {repo: nakomis/nakom.is,                deploys: false, deploy_action: ""}
+  NAKTV: {repo: nakomis/naktv,                   deploys: false, deploy_action: ""}
+  NDFM:  {repo: nakomis/nakomis-dragonfruit-mcp, deploys: false, deploy_action: ""}
+  PIOE:  {repo: nakomis/epio,                    deploys: false, deploy_action: ""}
+  PIPE:  {repo: nakomis/blog-pipeline,           deploys: false, deploy_action: ""}
+  PISH:  {repo: nakomis/pish,                    deploys: false, deploy_action: ""}
+  PLAY:  {repo: nakomis/playlist,                deploys: false, deploy_action: ""}
+  # RECIP: only deploy-sandbox.yml (manual, environment sandbox); no prod workflow. Wording needs Martin.
+  RECIP: {repo: nakomis/recipator,               deploys: true,  deploy_action: "Approve the prod deploy in GitHub Actions"}
+  SCHIM: {repo: nakomis/schimmelpfennig,         deploys: false, deploy_action: ""}
+  SCOPE: {repo: nakomis/nakoscope,               deploys: false, deploy_action: ""}
+  # SCRUM: deploy-sandbox.yml on push, promote-prod.yml by manual dispatch; wording needs Martin.
+  SCRUM: {repo: nakomis/nakomis-scrum,           deploys: true,  deploy_action: "Approve the prod deploy in GitHub Actions"}
+  SINT:  {repo: nakomis/sinter,                  deploys: false, deploy_action: ""}
+  STAT:  {repo: nakomis/nakostat,                deploys: false, deploy_action: ""}
+  TVRM:  {repo: nakomis/tv-remote,               deploys: false, deploy_action: ""}
+  # Not tied to one repo: tickets must name theirs with a `repo:` line.
+  PROJ:  {repo: null, deploys: false, deploy_action: ""}
+  MULTI: {repo: null, deploys: false, deploy_action: ""}

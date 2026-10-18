@@ -104,3 +104,27 @@ def test_paused_reader_rereads_the_flag_and_keeps_the_last_value_on_a_bad_file(t
     assert read() is False
     p.unlink()
     assert read() is False
+
+
+CODE_PROJECTS = {
+    "ADMIN": "nakom-admin", "BAPP": "blog-app", "BOOT": "bootboots", "CHATS": "claude-chats",
+    "CLOUD": "nakomis-infra", "CRYPT": "tinycrypt", "CSSC": "cdk-ssm-secret-checker",
+    "CTHU": "cthulhu", "EYE": "mcps", "FLEET": "nakomis-fleet", "HAND": "handmade-intelligence",
+    "KAPPA": "kappa-warmer", "KBRD": "mechanical-keyboard", "LAPC": "lapcat", "LIGHT": "lightning",
+    "MUSH": "mushroom-humidor", "NAKIS": "nakom.is", "NAKTV": "naktv",
+    "NDFM": "nakomis-dragonfruit-mcp", "PIOE": "epio", "PIPE": "blog-pipeline", "PISH": "pish",
+    "PLAY": "playlist", "RECIP": "recipator", "SCHIM": "schimmelpfennig", "SCOPE": "nakoscope",
+    "SCRUM": "nakomis-scrum", "SINT": "sinter", "STAT": "nakostat", "TVRM": "tv-remote",
+}
+
+
+def test_projects_yaml_covers_every_code_project():
+    projects = load_projects(Path(__file__).parent.parent / "config" / "projects.yaml")
+    assert {"BAU", "HOME"} <= projects.keys()
+    for ident, repo in CODE_PROJECTS.items():
+        assert projects[ident].repo == f"nakomis/{repo}", ident
+    assert projects["PROJ"].repo is None
+    assert projects["MULTI"].repo is None
+    assert not {"BCON", "HARM", "MONEY", "BENCH"} & projects.keys()
+    for p in projects.values():
+        assert p.deploy_action if p.deploys else True, p.identifier
