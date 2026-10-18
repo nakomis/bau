@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 import httpx
 import pytest
@@ -153,3 +154,57 @@ def test_priority_key_ties_break_by_created():
 def test_atc_state_keeps_board_order():
     s = AtcState({"Z": ProjectConfig("Z", None, False), "A": ProjectConfig("A", None, False)}, {}, False)
     assert list(s.projects) == ["Z", "A"]
+
+
+# -- fix round 1: empty answers, fsync, fetched_at -------------------------------
+def test_empty_projects_do_not_overwrite_a_non_empty_cache(tmp_path):
+    cache = tmp_path / "c.json"
+    ok = AtcClient("https://atc.test", None, None, transport=fake_atc(projects=[P_HOME], refs=["HOME-1"]))
+    load_atc_state(ok, cache)
+    before = cache.read_text()
+    empty = AtcClient("https://atc.test", None, None, transport=fake_atc(projects=[], refs=[]))
+    s = load_atc_state(empty, cache)
+    assert (s.projects, s.empty, s.stale) == ({}, True, False)
+    assert cache.read_text() == before
+
+
+def test_empty_projects_with_no_cache_are_still_cached(tmp_path):
+    cache = tmp_path / "c.json"
+    empty = AtcClient("https://atc.test", None, None, transport=fake_atc(projects=[], refs=["X-1"]))
+    s = load_atc_state(empty, cache)
+    assert s.empty and json.loads(cache.read_text())["refs"] == ["X-1"]
+
+
+def test_non_empty_answer_is_not_empty(tmp_path):
+    ok = AtcClient("https://atc.test", None, None, transport=fake_atc(projects=[P_HOME]))
+    assert load_atc_state(ok, tmp_path / "c.json").empty is False
+
+
+def test_cache_records_fetched_at_and_stale_state_carries_it(tmp_path):
+    cache = tmp_path / "c.json"
+    ok = AtcClient("https://atc.test", None, None, transport=fake_atc(projects=[P_HOME], refs=[]))
+    fresh = load_atc_state(ok, cache)
+    stamp = json.loads(cache.read_text())["fetched_at"]
+    assert datetime.fromisoformat(stamp).tzinfo is not None and fresh.fetched_at == stamp
+    down = AtcClient("https://atc.test", None, None, transport=fake_atc(status=502))
+    assert load_atc_state(down, cache).fetched_at == stamp
+
+
+def test_old_cache_without_fetched_at_still_loads(tmp_path):
+    cache = tmp_path / "c.json"
+    cache.write_text(json.dumps({"projects": [], "refs": []}))
+    down = AtcClient("https://atc.test", None, None, transport=fake_atc(status=502))
+    s = load_atc_state(down, cache)
+    assert s.stale and s.fetched_at is None
+
+
+def test_cache_is_fsynced_before_replace(tmp_path, monkeypatch):
+    import bau.atc as atc
+
+    events = []
+    real_fsync, real_replace = atc.os.fsync, atc.os.replace
+    monkeypatch.setattr(atc.os, "fsync", lambda fd: events.append("fsync") or real_fsync(fd))
+    monkeypatch.setattr(atc.os, "replace", lambda a, b: events.append("replace") or real_replace(a, b))
+    ok = AtcClient("https://atc.test", None, None, transport=fake_atc(projects=[P_HOME]))
+    load_atc_state(ok, tmp_path / "c.json")
+    assert events == ["fsync", "replace"]

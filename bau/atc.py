@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -34,6 +35,8 @@ class AtcState:
     projects: dict[str, ProjectConfig]  # board order (insertion order)
     priority: dict[str, int]  # ref -> position in ATC's priority order
     stale: bool
+    empty: bool = False  # ATC answered with no BAU-enabled projects: the night idles, visibly
+    fetched_at: str | None = None  # when ATC was last read successfully (ISO, UTC)
 
 
 class AtcClient:
@@ -89,20 +92,22 @@ def _project(row: dict) -> ProjectConfig:
     )
 
 
-def _state(projects: list[ProjectConfig], refs: list[str], stale: bool) -> AtcState:
+def _state(projects: list[ProjectConfig], refs: list[str], stale: bool, fetched_at: str | None) -> AtcState:
     order: dict[str, int] = {}
     for i, ref in enumerate(refs):
         order.setdefault(ref, i)
-    return AtcState({p.identifier: p for p in projects}, order, stale)
+    return AtcState({p.identifier: p for p in projects}, order, stale, not projects, fetched_at)
 
 
-def _write_cache(cache: Path, projects: list[ProjectConfig], refs: list[str]) -> None:
+def _write_cache(cache: Path, projects: list[ProjectConfig], refs: list[str], fetched_at: str) -> None:
     cache.parent.mkdir(parents=True, exist_ok=True)
-    data = {"projects": [asdict(p) for p in projects], "refs": refs}
+    data = {"fetched_at": fetched_at, "projects": [asdict(p) for p in projects], "refs": refs}
     fd, tmp = tempfile.mkstemp(dir=cache.parent, prefix=f".{cache.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())  # on disk before the rename, so a crash never leaves an empty cache
         os.replace(tmp, cache)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -114,14 +119,17 @@ def _read_cache(cache: Path) -> AtcState | None:
         data = json.loads(cache.read_text())
         projects = [ProjectConfig(**p) for p in data["projects"]]
         refs = [str(r) for r in data["refs"]]
-    except (OSError, ValueError, KeyError, TypeError):
+        fetched_at = data.get("fetched_at")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
-    return _state(projects, refs, stale=True)
+    return _state(projects, refs, True, fetched_at if isinstance(fetched_at, str) else None)
 
 
 def load_atc_state(client: AtcClient, cache: Path) -> AtcState:
     """ATC's projects and priority, cached on success. When ATC is unavailable, the cached copy marked
-    stale; with no readable cache, AtcUnavailable propagates (the run stops with `preflight: atc`)."""
+    stale; with no readable cache, AtcUnavailable propagates (the run stops with `preflight: atc`).
+    An answer with no projects is used (the night idles, recorded as `empty`) but never replaces a
+    cache that has projects, so a later outage still falls back to a useful copy."""
     try:
         projects, refs = client.projects(), client.priority()
     except AtcUnavailable:
@@ -129,11 +137,16 @@ def load_atc_state(client: AtcClient, cache: Path) -> AtcState:
         if cached is None:
             raise
         return cached
-    try:
-        _write_cache(cache, projects, refs)
-    except OSError as e:  # a cache that cannot be written must not stop a night ATC answered
-        print(f"bau: could not write the ATC cache {cache}: {e}", file=sys.stderr)
-    return _state(projects, refs, stale=False)
+    fetched_at = datetime.now(UTC).isoformat()
+    previous = _read_cache(cache) if not projects else None
+    if previous is not None and previous.projects:
+        print(f"bau: ATC listed no BAU projects; keeping the cache at {cache}", file=sys.stderr)
+    else:
+        try:
+            _write_cache(cache, projects, refs, fetched_at)
+        except OSError as e:  # a cache that cannot be written must not stop a night ATC answered
+            print(f"bau: could not write the ATC cache {cache}: {e}", file=sys.stderr)
+    return _state(projects, refs, False, fetched_at)
 
 
 def priority_key(item: Item, priority: dict[str, int]) -> tuple:

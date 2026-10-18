@@ -530,3 +530,37 @@ def test_wire_reads_projects_and_priority_from_atc(tmp_path, monkeypatch, cfg):
     assert list(projects) == ["HOME", "BAU"] and atc.priority == {"BAU-2": 0} and not atc.stale
     assert made == [("https://atc.plane.home.nakomis.com", cfg.plane.client_cert, cfg.plane.client_key)]
     assert cfg.paths.atc_cache.exists()
+
+
+def test_empty_atc_answer_is_recorded_as_empty(run_world, monkeypatch):
+    from bau.snapshot import read_snapshot
+
+    empty = AtcState({}, {}, False, empty=True, fetched_at="2026-10-14T11:00:00+00:00")
+    monkeypatch.setattr(run_world.cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW, empty))
+
+    def run(self):
+        self.report.atc = self.kwargs["atc"]
+        return self.report
+
+    monkeypatch.setattr(StubNight, "run", run)
+    assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
+    assert StubNight.instances[0].kwargs["atc"] == "empty"
+    last = read_snapshot(run_world.snapshot)["last_run"]
+    assert last["atc"] == "empty" and last["atc_age_hours"] is None
+
+
+def test_stale_snapshot_shows_the_cache_age(run_world, monkeypatch):
+    from bau.snapshot import read_snapshot
+
+    stale = AtcState({}, {}, True, fetched_at="2026-10-13T00:00:00+00:00")  # NOW is 14 Oct 12:00 UTC
+    monkeypatch.setattr(run_world.cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW, stale))
+
+    def run(self):
+        self.report.atc = self.kwargs["atc"]
+        return self.report
+
+    monkeypatch.setattr(StubNight, "run", run)
+    run_world.cli.main(["run", "--config", str(run_world.config_dir)])
+    last = read_snapshot(run_world.snapshot)["last_run"]
+    assert last["atc"] == "stale"
+    assert last["atc_fetched_at"] == "2026-10-13T00:00:00+00:00" and last["atc_age_hours"] == 36.0

@@ -64,7 +64,9 @@ class LastRun:
     labelled_not_bau: int = 0
     triaged: int = 0
     asked: int = 0
-    atc: str = "ok"  # "stale" when the night ran on the cached copy of ATC's projects and priority
+    atc: str = "ok"  # "stale": ran on the cached copy of ATC's data; "empty": ATC listed no projects
+    atc_fetched_at: str = ""  # when stale: when the cached copy was fetched
+    atc_age_hours: float | None = None  # when stale: the cached copy's age
 
 
 def _level(count: int, oldest: int, warn_count: int, warn_days: int, down_count: int, down_days: int) -> str:

@@ -1375,3 +1375,10 @@ def test_a_repo_override_outside_atc_is_declined_with_the_new_wording(cfg, tmp_p
 def test_preflight_with_no_atc_projects_ends_quietly(cfg, tmp_path):
     report = night(cfg, FakePlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path), projects={}).run()
     assert report.stop_reason == "ok" and report.sessions == 0
+
+
+def test_empty_atc_night_is_recorded(cfg, tmp_path):
+    report = night(
+        cfg, FakePlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path), projects={}, atc="empty"
+    ).run()
+    assert report.atc == "empty" and report.sessions == 0

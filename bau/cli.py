@@ -259,7 +259,7 @@ def _night(args: argparse.Namespace, cfg: Config, wired, paused: Callable[[], bo
         dry_run=getattr(args, "dry_run", False),
         paused=paused,
         priority=atc_state.priority,
-        atc="stale" if atc_state.stale else "ok",
+        atc=atc_label(atc_state),
     )
 
 
@@ -273,7 +273,8 @@ def _write_run_snapshot(
     *,
     failed: bool,
 ) -> None:
-    projects, plane, _, factory, _, clock, _ = wired
+    projects, plane, _, factory, _, clock, atc_state = wired
+    fetched_at, age = _stale_age(atc_state, clock())
     last = LastRun(
         started.isoformat(),
         clock().isoformat(),
@@ -288,6 +289,8 @@ def _write_run_snapshot(
         report.triaged,
         report.asked,
         report.atc,
+        fetched_at,
+        age,
     )
     previous = read_snapshot(cfg.paths.snapshot) or {}
     open_rows, deploy_rows, question_rows = (
@@ -314,6 +317,21 @@ def _write_run_snapshot(
         data["questions"] = previous.get("questions", [])
         data["nudge"] = previous.get("nudge", data["nudge"])  # computed from the kept rows, not the blanks
     write_snapshot(cfg.paths.snapshot, data)
+
+
+def atc_label(state: AtcState) -> str:
+    return "stale" if state.stale else "empty" if state.empty else "ok"
+
+
+def _stale_age(state: AtcState, now: datetime) -> tuple[str, float | None]:
+    """When the night ran on the cache: when it was fetched and its age in hours (one decimal)."""
+    if not state.stale or not state.fetched_at:
+        return "", None
+    try:
+        fetched = datetime.fromisoformat(state.fetched_at)
+    except ValueError:
+        return state.fetched_at, None
+    return state.fetched_at, round((now - fetched).total_seconds() / 3600, 1)
 
 
 def _unwired(cfg: Config):
