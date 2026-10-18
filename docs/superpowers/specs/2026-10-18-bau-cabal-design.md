@@ -1,7 +1,7 @@
 # BAU Cabal requests: design
 
 Date: 18 October 2026
-Status: draft for Martin's review (session "bau-pipeline", 18 Oct 2026). Plane: BAU-23.
+Status: approved by Martin 18 Oct 2026 (session "bau-pipeline", 18 Oct 2026). Plane: BAU-23.
 Builds on: `2026-10-14-bau-design.md` and `2026-10-18-bau-questions-design.md` (BAU-21: labels, marker comments, the Questions section, the answers API). Where this document and those disagree, this one wins for Cabal requests only.
 
 ## 1. Intent
