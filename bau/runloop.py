@@ -40,6 +40,13 @@ NOT_PICKED_LABELS = ("blocked", "bau-questions", "not-bau")
 TRIED_TWICE = "BAU tried this twice; comment on the ticket to ask for another attempt"
 
 
+def _clean(agent_text: str) -> str:
+    """Agent-derived text made safe to post: no brackets (so no forged markers), no links."""
+    from bau.sweep import _clean_reason  # deferred: sweep imports this module via abandon
+
+    return _clean_reason(agent_text)
+
+
 def branch_name(ref: str, title: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:40].rstrip("-")
     return f"{ref.lower()}-{slug}"
@@ -458,7 +465,9 @@ class Night:
             gh.comment(repo, pr.number, f"{CI_FIX_MARK} {fixes_so_far + 1}/{limit}")
         if result.outcome != "done":
             gh.comment(
-                repo, pr.number, f"[bau] Feedback session ended with {result.outcome}: {result.reason}"
+                repo,
+                pr.number,
+                f"[bau] Feedback session ended with {result.outcome}: {_clean(result.reason)}",
             )
             return
         self.report.feedback_handled += 1
@@ -678,12 +687,15 @@ class Night:
         if result.outcome == "too_big":
             self.plane.set_state(item.ref, back)
             self.mark_not_bau(
-                item.ref, f"[bau] Too big for BAU: {result.reason}. Returned to {back}. Marked not-bau."
+                item.ref,
+                f"[bau] Too big for BAU: {_clean(result.reason)}. Returned to {back}. Marked not-bau.",
             )
             self.repos.delete_checkout(branch)
             return
         if result.outcome != "done":
-            self.plane.comment(item.ref, f"[bau] Session ended with {result.outcome}: {result.reason}")
+            self.plane.comment(
+                item.ref, f"[bau] Session ended with {result.outcome}: {_clean(result.reason)}"
+            )
             return
         opened = next(
             (p for p in gh.open_prs(repo, self.cfg.identities.worker_github_login) if p.head_ref == branch),
@@ -731,12 +743,14 @@ class Night:
         if result.outcome == "rate_limited":
             return None, opened
         if result.outcome == "too_big":
-            self.close_too_big(item, repo, gh, opened, branch, back, f"fix session: {result.reason}")
+            self.close_too_big(item, repo, gh, opened, branch, back, f"fix session: {_clean(result.reason)}")
             return None, opened
         gh.comment(repo, opened.number, f"{CI_FIX_MARK} {so_far + 1}/{limit}")
         if result.outcome != "done":
             gh.comment(
-                repo, opened.number, f"[bau] CI-fix session ended with {result.outcome}: {result.reason}"
+                repo,
+                opened.number,
+                f"[bau] CI-fix session ended with {result.outcome}: {_clean(result.reason)}",
             )
             self.plane.comment(
                 item.ref,

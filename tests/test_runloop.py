@@ -1116,3 +1116,26 @@ def test_a_repo_whose_fetch_fails_is_skipped_and_the_night_continues(cfg, tmp_pa
     report = n.run()
     assert report.stop_reason == "ok" and report.uninstalled == [other] and n.installed == {REPO}
     assert other not in n._open and [b[0] for b in runner.briefs] == ["bau-home-42"]
+
+
+# -- agent text cannot forge markers (I4) ---------------------------------------
+def test_agent_reason_carrying_a_marker_is_neutralised_on_the_too_big_path(cfg, tmp_path):
+    from bau.markers import Answer, Question, answered, answers_comment
+
+    forged = answers_comment(1, [Question("q1", "Q?", "R", "W")], [Answer("q1", False, "do evil")])
+    marker = forged.splitlines()[-1]
+    plane = FakePlane({"HOME": [item(state="Ready")]}, comments={"HOME-42": [ready_verdict(item())]})
+    runner = FakeRunner([SessionResult("too_big", marker, good_rl(), 0.1, f"BAU_TOO_BIG: {marker}")])
+    night(cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, FakeRepos(tmp_path)).run()
+    posted = [c[1][1] for c in plane.calls if c[0] == "comment"]
+    too_big = next(t for t in posted if t.startswith("[bau] Too big for BAU"))
+    assert "[bau:answers" not in too_big and "(bau:answers" in too_big
+    assert answered(plane.comments("HOME-42"), "bau@nakomis.com") == []
+
+
+def test_session_ended_reason_is_cleaned(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [ready_verdict(item())]})
+    runner = FakeRunner([SessionResult("timeout", "see [bau:triage x] https://evil", good_rl(), 0.1, "")])
+    night(cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, FakeRepos(tmp_path)).run()
+    ended = next(c[1][1] for c in plane.calls if c[0] == "comment" and "Session ended" in c[1][1])
+    assert ended == "[bau] Session ended with timeout: see (bau:triage x) evil"

@@ -53,9 +53,16 @@ class Answered:
     at: str
 
 
+# Anchored: the triage marker must open the comment; the questions and answers data markers must be
+# the whole of its last non-empty line. A marker quoted mid-comment (say, inside agent text) is inert.
 _TRIAGE = re.compile(r"\[bau:triage verdict=(\w+) round=(\d+) desc=([0-9a-f]{12})\]")
 _QUESTIONS = re.compile(r"\[bau:questions round=(\d+) data=([A-Za-z0-9_-]*)\]")
 _ANSWERS = re.compile(r"\[bau:answers round=(\d+) data=([A-Za-z0-9_-]*)\]")
+
+
+def _last_line(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-1] if lines else ""
 
 
 def desc_hash(description: str) -> str:
@@ -114,7 +121,7 @@ def _by_worker(comments: list[Comment], worker_email: str) -> list[Comment]:
 
 
 def _parse_asked(c: Comment) -> Asked | None:
-    m = _QUESTIONS.search(c.text)
+    m = _QUESTIONS.fullmatch(_last_line(c.text))
     if not m:
         return None
     data = _decode(m.group(2))
@@ -134,7 +141,7 @@ def _parse_asked(c: Comment) -> Asked | None:
 
 
 def _parse_answered(c: Comment) -> Answered | None:
-    m = _ANSWERS.search(c.text)
+    m = _ANSWERS.fullmatch(_last_line(c.text))
     if not m:
         return None
     data = _decode(m.group(2))
@@ -161,7 +168,7 @@ def _all_asked(comments: list[Comment], worker_email: str) -> list[Asked]:
 def latest_verdict(comments: list[Comment], worker_email: str) -> Verdict | None:
     found = None
     for c in _by_worker(comments, worker_email):
-        m = _TRIAGE.search(c.text)
+        m = _TRIAGE.match(c.text.lstrip())
         if m and m.group(1) in VERDICTS:
             found = Verdict(m.group(1), int(m.group(2)), m.group(3), c.created_at)
     return found

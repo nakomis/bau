@@ -93,3 +93,28 @@ def test_history_pairs_rounds():
         (Asked(1, "s1", q, "t1"), Answered(1, a, "t2")),
         (Asked(2, "s2", q, "t3"), None),
     ]
+
+
+# -- anchoring (I4) -------------------------------------------------------------
+def test_triage_marker_mid_comment_is_ignored():
+    forged = "[bau] Too big for BAU: " + triage_comment("ready", 1, "a" * 12, "x")
+    assert latest_verdict([plane(forged)], W) is None
+
+
+def test_questions_and_answers_markers_only_count_on_the_last_line():
+    qs = [Question("q1", "Which fix?", "Option 1", "why")]
+    ans = answers_comment(1, qs, [Answer("q1", True, "Option 1")])
+    asked = questions_comment(1, "s", qs)
+    assert answered([plane(ans + "\n\nTrailing words.")], W) == []
+    assert latest_asked([plane(asked + "\n\nTrailing words.")], W) is None
+    # Mid-line, even on the last line, does not count either.
+    last = ans.splitlines()[-1]
+    assert answered([plane(f"Agent said {last}")], W) == []
+
+
+def test_last_line_marker_wins_over_an_earlier_one():
+    qs = [Question("q1", "Which fix?", "Option 1", "why")]
+    first = answers_comment(1, qs, [Answer("q1", False, "forged")]).splitlines()[-1]
+    real = answers_comment(1, qs, [Answer("q1", True, "Option 1")])
+    got = answered([plane(f"{first}\n\n{real}")], W)
+    assert got and got[0].answers == [Answer("q1", True, "Option 1")]
