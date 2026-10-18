@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import os
 import shutil
 import subprocess
-from collections.abc import Callable
+import tempfile
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +80,19 @@ class Repos:
         self._git("remote", "set-url", "origin", origin, cwd=dest)
         self._git("checkout", "-b", branch, cwd=dest)
         return dest
+
+    @contextlib.contextmanager
+    def scratch_clone(self, repo: str) -> Iterator[Path]:
+        """A throwaway clone of main for a read-only triage session; no token, deleted on exit.
+        --no-hardlinks copies the objects: the bare repo is not mounted in a triage session (so no
+        alternates), and no object file of the bare repo is linked into a directory the container
+        can write."""
+        dest = Path(tempfile.mkdtemp(prefix="triage-", dir=self.work_root))
+        try:
+            self._git("clone", "--no-hardlinks", "--branch", "main", str(self.bare_path(repo)), str(dest))
+            yield dest
+        finally:
+            shutil.rmtree(dest, ignore_errors=True)
 
     def has_checkout(self, branch: str) -> bool:
         return self.checkout_path(branch).exists()

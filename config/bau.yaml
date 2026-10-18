@@ -5,10 +5,8 @@ paused: false
 schedule:
   no_new_sessions_after: "05:00"
   timezone: Europe/London
-  sweep_no_new_sessions_after: "00:50"  # the monthly sweep must not eat into the night
 
 limits:
-  open_pr_ceiling: 50
   pace_margin: 0.10
   five_hour_kill: 0.80
   session_wall_clock_minutes: 60
@@ -18,6 +16,23 @@ limits:
   too_big_files: 15
   too_big_lines: 400
   sweep_session_wall_clock_minutes: 15
+  triage_budget_usd: 1.25
+  triage_wall_clock_minutes: 10
+  max_question_rounds: 4
+  sweep_owner_quiet_days: 7
+  sweep_batch_items: 40
+  max_triage_failures: 2
+
+# Dashboard nudges (BD-1): warn at the count or the age, down at the higher pair.
+nudge:
+  prs_warn_count: 5
+  prs_warn_days: 5
+  prs_down_count: 10
+  prs_down_days: 14
+  questions_warn_count: 5
+  questions_warn_days: 3
+  questions_down_count: 10
+  questions_down_days: 7
 
 models:
   default: claude-opus-5-5

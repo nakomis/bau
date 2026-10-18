@@ -7,7 +7,7 @@ Overnight BAU maintenance worker: Plane items in, pull requests out. Spec:
 
 - Python 3.12 managed with `uv`: `uv sync`, `uv run pytest`, `uv run ruff check .`. Coverage floor 70%.
 - Host-side code (`bau/`) runs on Cere as `nakomis`; the agent runs inside `container/`. The agent never talks to Plane.
-- Every write to Plane or GitHub happens through `bau/plane.py` and `bau/github.py`, driven from `bau/runloop.py`, `bau/abandon.py` or `bau/sweep.py`; nothing else writes.
+- Every write to Plane or GitHub happens through `bau/plane.py` and `bau/github.py`, driven from `bau/runloop.py`, `bau/abandon.py`, `bau/sweep.py`, `bau/triage.py` or `bau/answers.py`; nothing else writes.
 - Policy constants live in `config/bau.yaml`, never in code. Tests build explicit `Limits(...)`.
 - Secrets come from the macOS login keychain, service `bau` (`bau/secrets.py`); never from files in the repo.
 - Always work on a feature branch and open a PR. Branch and PR title carry the Plane ref, e.g. `bau-3-config` and `feat: config loading (BAU-3)`.

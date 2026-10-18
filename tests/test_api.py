@@ -143,3 +143,95 @@ def test_abandon_leaves_a_corrupt_or_missing_snapshot_alone(cfg, tmp_path):
     c = client(cfg, tmp_path, plane)
     assert c.post("/abandon/HOME-42", headers=AUTH).status_code == 200
     assert cfg.paths.snapshot.read_text() == "{not json"
+
+
+# --- questions: /answers and /not-bau ---------------------------------------------------------
+
+from bau.markers import Question, questions_comment  # noqa: E402
+from bau.plane import Comment  # noqa: E402
+
+_QS = [Question("q1", "Which?", "Option A", "because")]
+_ASKED_AT = "2026-10-17T22:00:00Z"
+_ANSWERS = {
+    "round": 1,
+    "asked_at": _ASKED_AT,
+    "answers": [{"id": "q1", "accepted": True, "text": "Option A"}],
+}
+
+
+def _waiting(labels=("BAU", "bau-questions")):
+    asked = Comment("c1", "bau@nakomis.com", _ASKED_AT, questions_comment(1, "S", _QS))
+    return FakePlane({"HOME": [item(labels=labels)]}, comments={"HOME-42": [asked]})
+
+
+def test_answers_and_not_bau_need_the_token(cfg, tmp_path):
+    c = client(cfg, tmp_path, _waiting())
+    assert c.post("/answers/HOME-42", json=_ANSWERS).status_code == 403
+    assert c.post("/not-bau/HOME-42").status_code == 403
+    assert c.post("/answers/HOME-42", json=_ANSWERS, headers={"X-Bau-Proxy-Token": "no"}).status_code == 403
+
+
+def test_answers_route_posts_and_drops_the_question_row(cfg, tmp_path):
+    cfg.paths.snapshot.parent.mkdir(parents=True, exist_ok=True)
+    cfg.paths.snapshot.write_text(
+        json.dumps({"schema": 1, "questions": [{"ref": "HOME-42"}, {"ref": "HOME-43"}]})
+    )
+    plane = _waiting()
+    c = client(cfg, tmp_path, plane)
+    r = c.post("/answers/HOME-42", json=_ANSWERS, headers=AUTH)
+    assert r.status_code == 200 and r.json() == {"ref": "HOME-42"}
+    assert ("remove_labels", ("HOME-42", ["bau-questions"])) in plane.calls
+    assert [q["ref"] for q in c.get("/state.json").json()["questions"]] == ["HOME-43"]
+
+
+def test_answers_error_statuses(cfg, tmp_path):
+    def post(plane, body=_ANSWERS, ref="HOME-42"):
+        return client(cfg, tmp_path, plane).post(f"/answers/{ref}", json=body, headers=AUTH)
+
+    assert post(_waiting(), ref="nope").status_code == 400
+    assert post(_waiting(), ref="ZZZ-1").json() == {"error": "unknown project"}
+    r = post(_waiting(), {**_ANSWERS, "answers": [{"id": "q1", "accepted": False, "text": ""}]})
+    assert r.status_code == 400
+    assert post(_waiting(), {**_ANSWERS, "round": 2}).status_code == 409
+    assert post(_waiting(), {**_ANSWERS, "asked_at": "other"}).status_code == 409
+    assert post(_waiting(labels=("BAU",))).status_code == 409
+    long = {**_ANSWERS, "answers": [{"id": "q1", "accepted": False, "text": "x" * 2001}]}
+    assert post(_waiting(), long).status_code == 422
+
+
+def test_answers_and_not_bau_during_run_are_409(cfg, tmp_path):
+    with run_lock(cfg.paths.logs.parent / "run.lock"):
+        c = client(cfg, tmp_path, _waiting())
+        r1 = c.post("/answers/HOME-42", json=_ANSWERS, headers=AUTH)
+        r2 = c.post("/not-bau/HOME-42", headers=AUTH)
+    for r in (r1, r2):
+        assert r.status_code == 409
+        assert r.json() == {"error": "another BAU operation is in progress; try again shortly"}
+
+
+def test_not_bau_route(cfg, tmp_path):
+    plane = _waiting()
+    c = client(cfg, tmp_path, plane)
+    r = c.post("/not-bau/HOME-42", json={"note": "nah"}, headers=AUTH)
+    assert r.status_code == 200 and r.json() == {"ref": "HOME-42"}
+    assert ("add_labels", ("HOME-42", ["not-bau"])) in plane.calls
+    assert c.post("/not-bau/nope", headers=AUTH).status_code == 400
+    assert c.post("/not-bau/ZZZ-1", headers=AUTH).status_code == 400
+
+
+def test_answers_unexpected_error_is_500_without_detail(cfg, tmp_path):
+    class Boom(FakePlane):
+        def get_item(self, ref):
+            raise RuntimeError("secret-token-abc")
+
+        def add_labels(self, ref, names):
+            raise RuntimeError("secret-token-abc")
+
+    c = client(cfg, tmp_path, Boom({}))
+    responses = (
+        c.post("/answers/HOME-42", json=_ANSWERS, headers=AUTH),
+        c.post("/not-bau/HOME-42", headers=AUTH),
+    )
+    for r in responses:
+        assert r.status_code == 500 and r.json() == {"error": "internal error"}
+        assert "secret" not in r.text

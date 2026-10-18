@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from bau.cli import ClientFactory, build_parser, exit_code, snapshot_rows
+from bau.config import Nudge
 from bau.github import Token
 from bau.snapshot import OpenPrRow
 
@@ -23,7 +24,7 @@ def test_config_dir_option_before_or_after_subcommand():
     assert p.parse_args(["run"]).config == Path("/Users/nakomis/bau/src/config")
 
 
-@pytest.mark.parametrize("reason", ["ok", "cutoff", "pace", "ceiling", "paused", "five-hour"])
+@pytest.mark.parametrize("reason", ["ok", "cutoff", "pace", "paused", "five-hour"])
 def test_normal_stop_reasons_exit_zero(reason):
     assert exit_code(reason) == 0
 
@@ -34,6 +35,7 @@ def test_abnormal_stop_reasons_exit_one(reason):
 
 
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
+NUDGE = Nudge(5, 5, 10, 14, 5, 3, 10, 7)
 
 
 class FakePr:
@@ -78,9 +80,11 @@ def test_snapshot_rows_survives_one_repo_failing():
         "a/bad": FakeGh([], fail=True),
         "a/good": FakeGh([FakePr(1, "feat: x (HOME-3)"), FakePr(2, "no ref")]),
     }
-    cfg = SimpleNamespace(identities=SimpleNamespace(worker_github_login="bot"))
+    cfg = SimpleNamespace(
+        identities=SimpleNamespace(worker_github_login="bot", worker_plane_email="bau@nakomis.com")
+    )
     logs = []
-    open_rows, deploy_rows = snapshot_rows(
+    open_rows, deploy_rows, _ = snapshot_rows(
         cfg, projects, FakePlane(), lambda repo: ghs[repo], lambda: NOW, log=logs.append
     )
     assert [r.ref for r in open_rows] == ["HOME-3"]
@@ -119,7 +123,7 @@ def test_snapshot_ignores_unknown_last_run_keys(tmp_path, monkeypatch):
             }
         )
     )
-    cfg = SimpleNamespace(paused=False, paths=SimpleNamespace(snapshot=snap))
+    cfg = SimpleNamespace(paused=False, paths=SimpleNamespace(snapshot=snap), nudge=NUDGE)
     monkeypatch.setattr(cli, "load_config", lambda p: cfg)
     monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW))
     assert cli.main(["snapshot"]) == 0
@@ -177,6 +181,7 @@ def run_world(tmp_path, monkeypatch):
     cfg = SimpleNamespace(
         paused=False,
         paths=SimpleNamespace(snapshot=tmp_path / "state.json", logs=tmp_path / "logs"),
+        nudge=NUDGE,
         claude=SimpleNamespace(oauth_token=None),
     )
     StubNight.instances, StubNight.outcome = [], None
@@ -184,7 +189,7 @@ def run_world(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW))
     monkeypatch.setattr(cli, "read_secret", lambda ref: "oat")
     monkeypatch.setattr(cli, "SessionRunner", lambda c, **kw: SimpleNamespace(cfg=c, **kw))
-    monkeypatch.setattr(cli, "snapshot_rows", lambda *a, **k: ([], []))
+    monkeypatch.setattr(cli, "snapshot_rows", lambda *a, **k: ([], [], []))
     monkeypatch.setattr(cli, "Night", StubNight)
     return SimpleNamespace(cli=cli, cfg=cfg, config_dir=config_dir, snapshot=tmp_path / "state.json")
 
@@ -271,95 +276,6 @@ def test_cli_abandon_invalid_ref_exits_2(capsys):
     assert "invalid ref" in capsys.readouterr().out
 
 
-def test_sweep_subcommand_and_first_sunday_gate(monkeypatch):
-    from datetime import date
-
-    from bau import cli
-
-    p = cli.build_parser()
-    a = p.parse_args(["sweep", "--force", "--dry-run"])
-    assert a.force is True and a.dry_run is True
-    assert p.parse_args(["sweep"]).force is False
-    monkeypatch.setattr(cli, "today", lambda: date(2026, 11, 8))
-    assert cli.sweep_due(force=False) is False
-    assert cli.sweep_due(force=True) is True
-    monkeypatch.setattr(cli, "today", lambda: date(2026, 11, 1))
-    assert cli.sweep_due(force=False) is True
-
-
-class StubSweep:
-    instances: list = []
-    outcome: BaseException | None = None
-
-    def __init__(self, *args, **kwargs):
-        from bau.sweep import SweepReport
-
-        self.args, self.kwargs = args, kwargs
-        self.report = SweepReport(projects=2, sessions=2, candidates=3, summary_ref="BAU-7")
-        StubSweep.instances.append(self)
-
-    def run(self):
-        if StubSweep.outcome is not None:
-            raise StubSweep.outcome
-        return self.report
-
-
-@pytest.fixture
-def sweep_world(run_world, monkeypatch):
-    from datetime import date
-
-    StubSweep.instances, StubSweep.outcome = [], None
-    monkeypatch.setattr(run_world.cli, "Sweep", StubSweep)
-    monkeypatch.setattr(run_world.cli, "today", lambda: date(2026, 11, 1))
-    monkeypatch.setattr(run_world.cli, "SWEEP_LOCK_WAIT", 0)
-    monkeypatch.setattr(run_world.cli, "RUN_LOCK_WAIT", 0)
-    run_world.cfg.identities = SimpleNamespace()
-    run_world.cfg.limits = SimpleNamespace(session_wall_clock_minutes=60, sweep_session_wall_clock_minutes=15)
-    return run_world
-
-
-def _sweep(w, *extra):
-    return w.cli.main(["sweep", "--config", str(w.config_dir), *extra])
-
-
-def test_sweep_does_nothing_off_the_first_sunday(sweep_world, monkeypatch, capsys):
-    from datetime import date
-
-    monkeypatch.setattr(sweep_world.cli, "today", lambda: date(2026, 11, 8))
-    assert _sweep(sweep_world) == 0
-    assert "not the first Sunday; nothing to do" in capsys.readouterr().out
-    assert StubSweep.instances == []
-
-
-def test_sweep_force_runs_prints_a_report_and_never_writes_the_snapshot(sweep_world, monkeypatch, capsys):
-    from datetime import date
-
-    monkeypatch.setattr(sweep_world.cli, "today", lambda: date(2026, 11, 8))
-    assert _sweep(sweep_world, "--force", "--dry-run") == 0
-    assert StubSweep.instances[0].kwargs["dry_run"] is True
-    out = capsys.readouterr().out
-    assert "BAU-7" in out and "3 candidate(s)" in out and "stop reason ok" in out
-    assert not sweep_world.snapshot.exists()
-
-
-def test_sweep_gives_up_quietly_when_the_lock_stays_held(sweep_world, capsys):
-    import fcntl
-
-    lock = sweep_world.cfg.paths.logs.parent / "run.lock"
-    with open(lock, "a") as held:
-        fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        assert _sweep(sweep_world) == 0
-    assert StubSweep.instances == []
-    assert "lock" in capsys.readouterr().out
-
-
-def test_sweep_failure_exits_one_with_type_and_message(sweep_world, capsys):
-    StubSweep.outcome = RuntimeError("plane down")
-    assert _sweep(sweep_world) == 1
-    err = capsys.readouterr().err
-    assert "RuntimeError: plane down" in err and "Traceback" not in err
-
-
 def test_run_that_cannot_get_the_lock_writes_a_locked_snapshot(run_world, monkeypatch, capsys):
     import fcntl
 
@@ -375,7 +291,7 @@ def test_run_that_cannot_get_the_lock_writes_a_locked_snapshot(run_world, monkey
     assert StubNight.instances == []
 
 
-def test_run_waits_up_to_an_hour_and_sweep_up_to_half(run_world, monkeypatch):
+def test_run_waits_up_to_an_hour(run_world, monkeypatch):
     seen = []
 
     from contextlib import contextmanager
@@ -387,31 +303,128 @@ def test_run_waits_up_to_an_hour_and_sweep_up_to_half(run_world, monkeypatch):
 
     monkeypatch.setattr(run_world.cli, "run_lock", spy)
     run_world.cfg.identities = SimpleNamespace()
-    monkeypatch.setattr(run_world.cli, "Sweep", StubSweep)
     run_world.cli.main(["run", "--config", str(run_world.config_dir)])
-    run_world.cli.main(["sweep", "--force", "--config", str(run_world.config_dir)])
-    assert seen == [3600, 1800]
+    assert seen == [3600]
 
 
-def test_sweep_runner_uses_the_sweep_wall_clock(sweep_world):
-    assert _sweep(sweep_world, "--force") == 0
-    runner = StubSweep.instances[0].args[3]
-    assert runner.wall_clock_minutes == sweep_world.cfg.limits.sweep_session_wall_clock_minutes == 15
+def test_snapshot_rows_builds_question_rows():
+    from bau.config import ProjectConfig
+    from bau.markers import Question, questions_comment
+    from bau.plane import Comment, Item
+
+    def item(ref, labels):
+        return Item(ref, ref.lower(), "p", f"Title {ref}", "", "Todo", labels, None, "2026-10-01T00:00:00Z")
+
+    qs = [Question("q1", "Which one?", "A", "because")]
+    comments = {
+        "HOME-5": [
+            Comment("c1", "someone@else.com", "2026-10-01T00:00:00Z", "chatter"),
+            Comment("c2", "bau@nakomis.com", "2026-10-10T12:00:00Z", questions_comment(2, "Sum", qs)),
+        ],
+        "HOME-6": [Comment("c3", "bau@nakomis.com", "2026-10-10T12:00:00Z", "no marker here")],
+    }
+
+    comments["NOREPO-1"] = comments["HOME-5"]
+
+    class QPlane(FakePlane):
+        def list_items(self, ident, label):
+            if label != "bau-questions":
+                return []
+            if ident == "HOME":
+                return [item("HOME-5", ["bau-questions"]), item("HOME-6", ["bau-questions"])]
+            return [item("NOREPO-1", ["bau-questions"])]
+
+        def comments(self, ref):
+            return comments[ref]
+
+    projects = {
+        "HOME": ProjectConfig("HOME", "a/good", False),
+        "NOREPO": ProjectConfig("NOREPO", None, False),
+    }
+    cfg = SimpleNamespace(
+        identities=SimpleNamespace(worker_github_login="bot", worker_plane_email="bau@nakomis.com")
+    )
+    logs = []
+
+    def factory(repo):
+        assert repo is not None
+        return FakeGh([])
+
+    open_rows, deploy_rows, question_rows = snapshot_rows(
+        cfg, projects, QPlane(), factory, lambda: NOW, log=logs.append
+    )
+    assert open_rows == [] and deploy_rows == []
+    r = question_rows[0]
+    assert (r.ref, r.repo, r.repo_url, r.title, r.age_days, r.round, r.summary) == (
+        "HOME-5",
+        "a/good",
+        "https://github.com/a/good",
+        "Title HOME-5",
+        4,
+        2,
+        "Sum",
+    )
+    assert r.asked_at == "2026-10-10T12:00:00Z" and r.plane_url == "https://plane/HOME-5"
+    assert r.questions == [{"id": "q1", "text": "Which one?", "recommendation": "A", "why": "because"}]
+    norepo = [x for x in question_rows if x.ref == "NOREPO-1"][0]
+    assert norepo.repo == "" and norepo.repo_url == ""
+    assert not [r for r in question_rows if r.ref == "HOME-6"]
+    assert any("HOME-6" in str(m) for m in logs)
 
 
-def test_sweep_exit_code_follows_the_stop_reason(sweep_world):
-    from bau.sweep import SweepReport
+def test_failed_run_snapshot_keeps_previous_questions_and_nudge(run_world):
+    import json
 
-    real = StubSweep.__init__
+    from bau.snapshot import read_snapshot
 
-    def init(self, *a, **k):
-        real(self, *a, **k)
-        self.report = SweepReport(stop_reason=StubSweep.reason)
+    kept = {"questions": [{"ref": "HOME-5"}], "nudge": {"level": "warn", "prs": "ok", "questions": "warn"}}
+    run_world.snapshot.write_text(json.dumps(kept))
+    StubNight.outcome = RuntimeError("x")
+    assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 1
+    snap = read_snapshot(run_world.snapshot)
+    assert snap["questions"] == [{"ref": "HOME-5"}] and snap["nudge"]["level"] == "warn"
+    assert snap["uninstalled"] == []
 
-    StubSweep.__init__ = init
-    try:
-        for reason, code in (("sweep-cutoff", 0), ("cutoff", 0), ("telemetry-missing", 1)):
-            StubSweep.reason = reason
-            assert _sweep(sweep_world, "--force") == code
-    finally:
-        StubSweep.__init__ = real
+
+def test_hourly_snapshot_carries_uninstalled_forward(run_world, monkeypatch):
+    import json
+
+    from bau.snapshot import read_snapshot
+
+    run_world.snapshot.write_text(json.dumps({"uninstalled": ["o/gone"]}))
+    monkeypatch.setattr(run_world.cli, "snapshot_rows", lambda *a, **k: ([], [], []))
+    assert run_world.cli.main(["snapshot", "--config", str(run_world.config_dir)]) == 0
+    snap = read_snapshot(run_world.snapshot)
+    assert snap["uninstalled"] == ["o/gone"] and snap["schema"] == 2
+
+
+def test_snapshot_rows_keeps_previous_questions_when_plane_fails():
+    from bau.config import ProjectConfig
+    from bau.snapshot import nudge
+
+    class DownPlane(FakePlane):
+        def list_items(self, ident, label):
+            raise RuntimeError("plane down")
+
+    old = {
+        "repo": "a/good", "ref": "HOME-5", "title": "T", "plane_url": "p", "repo_url": "u",
+        "asked_at": "a", "age_days": 9, "round": 1, "summary": "s", "questions": [],
+    }  # fmt: skip
+    other = {**old, "ref": "OTHER-1"}
+    projects = {"HOME": ProjectConfig("HOME", None, False)}
+    cfg = SimpleNamespace(
+        identities=SimpleNamespace(worker_github_login="bot", worker_plane_email="bau@nakomis.com")
+    )
+    logs = []
+    _, _, rows = snapshot_rows(
+        cfg, projects, DownPlane(), lambda r: None, lambda: NOW, log=logs.append,
+        previous_questions=[old, other],
+    )  # fmt: skip
+    assert [r.ref for r in rows] == ["HOME-5"] and rows[0].age_days == 9
+    assert nudge([], rows, NUDGE)["questions"] == "down"
+    assert logs
+
+
+def test_sweep_subcommand_is_gone():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["sweep"])

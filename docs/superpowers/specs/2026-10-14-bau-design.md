@@ -3,6 +3,7 @@
 Date: 14 October 2026
 Status: design approved by Martin 14 Oct 2026 (session "bau"). Implementation plans in `plans/` (core, web, host, sweep); awaiting plan review and choice of execution method.
 Home once the repo exists: `nakomis/bau`, `docs/superpowers/specs/2026-10-14-bau-design.md`.
+Amended by 2026-10-18-bau-questions-design.md (questions queue, nightly labelling sweep).
 
 ## 1. Purpose
 

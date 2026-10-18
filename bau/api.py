@@ -18,11 +18,13 @@ from bau.abandon import (
     UnknownProject,
     abandon,
 )
+from bau.answers import MissingAnswer, NotWaiting, StaleRound, mark_not_bau, submit_answers
 from bau.checkout import Repos
 from bau.config import Config, ProjectConfig
 from bau.github import GitHubClient
+from bau.markers import Answer
 from bau.plane import PlaneClient
-from bau.snapshot import drop_open_pr, read_snapshot
+from bau.snapshot import drop_open_pr, drop_question, read_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +35,18 @@ class Forbidden(Exception):
 
 class AbandonBody(BaseModel):
     note: str = Field(default="", max_length=500)
+
+
+class AnswerBody(BaseModel):
+    id: str = Field(max_length=100)
+    accepted: bool
+    text: str = Field(default="", max_length=2000)
+
+
+class AnswersBody(BaseModel):
+    round: int
+    asked_at: str = Field(max_length=100)
+    answers: list[AnswerBody] = Field(max_length=20)
 
 
 def create_app(
@@ -93,6 +107,58 @@ def create_app(
         except Exception as e:  # noqa: BLE001 - the abandon itself succeeded; the next snapshot corrects this
             log.warning("snapshot update after abandon %s failed: %s", ref, type(e).__name__)
         return {"ref": r.ref, "pr": r.pr, "restored_state": r.restored_state}
+
+    lock_path = cfg.paths.logs.parent / "run.lock"
+
+    def question_write(ref: str, what: str, action: Callable[[], None]):
+        try:
+            action()
+        except InvalidRef:
+            return JSONResponse({"error": "invalid ref"}, status_code=400)
+        except UnknownProject:
+            return JSONResponse({"error": "unknown project"}, status_code=400)
+        except MissingAnswer as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except RunInProgress:
+            return JSONResponse({"error": RUN_IN_PROGRESS}, status_code=409)
+        except (StaleRound, NotWaiting) as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        except Exception as e:  # noqa: BLE001 - never echo text that could contain tokens
+            log.error("%s %s failed: %s", what, ref, type(e).__name__)
+            return JSONResponse({"error": "internal error"}, status_code=500)
+        try:
+            drop_question(cfg.paths.snapshot, ref.strip())
+        except Exception as e:  # noqa: BLE001 - the write itself succeeded; the next snapshot corrects this
+            log.warning("snapshot update after %s %s failed: %s", what, ref, type(e).__name__)
+        return {"ref": ref.strip()}
+
+    @app.post("/answers/{ref}", dependencies=[Depends(require_token)])
+    def answers_route(ref: str, body: AnswersBody):
+        answers = [Answer(a.id, a.accepted, a.text) for a in body.answers]
+        return question_write(
+            ref,
+            "answers",
+            lambda: submit_answers(
+                ref,
+                body.round,
+                body.asked_at,
+                answers,
+                plane=plane,
+                projects=projects,
+                worker_email=cfg.identities.worker_plane_email,
+                lock_path=lock_path,
+            ),
+        )
+
+    @app.post("/not-bau/{ref}", dependencies=[Depends(require_token)])
+    def not_bau_route(ref: str, body: AbandonBody | None = None):
+        return question_write(
+            ref,
+            "not-bau",
+            lambda: mark_not_bau(
+                ref, body.note if body else "", plane=plane, projects=projects, lock_path=lock_path
+            ),
+        )
 
     if static_dir is not None and static_dir.is_dir():
         app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")

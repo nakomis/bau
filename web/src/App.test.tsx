@@ -182,4 +182,95 @@ describe('App', () => {
     expect(screen.queryByText('HOME-1: restored to Todo')).not.toBeInTheDocument();
     expect(screen.getByText('HOME-7: restored to Todo')).toBeInTheDocument();
   });
+
+  const qrow = {
+    repo: 'nakomis/home-infra',
+    ref: 'HOME-9',
+    title: 'Ask me',
+    plane_url: 'https://plane/HOME-9',
+    repo_url: 'https://github.com/nakomis/home-infra',
+    asked_at: '2026-10-13T01:00:00Z',
+    age_days: 1,
+    round: 1,
+    summary: 'Need a decision',
+    questions: [{ id: 'q1', text: 'Which?', recommendation: 'A', why: 'Because' }],
+  };
+
+  it('shows the questions section above open PRs and hides it when empty', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(respond({ ...snap, schema: 2, questions: [qrow] })),
+    );
+    await mount();
+    const q = screen.getByRole('heading', { name: /Questions \(1\)/ });
+    const prs = screen.getByRole('heading', { name: /awaiting review/i });
+    expect(q.compareDocumentPosition(prs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('has no questions heading when there are none', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(respond(snap)));
+    await mount();
+    expect(screen.queryByRole('heading', { name: /Questions/ })).not.toBeInTheDocument();
+  });
+
+  it('sends answers, shows a notice and refetches', async () => {
+    const f = vi.fn((url: string) =>
+      url === '/state.json'
+        ? Promise.resolve(respond({ ...snap, schema: 2, questions: [qrow] }))
+        : Promise.resolve(respond({ ref: 'HOME-9' })),
+    );
+    vi.stubGlobal('fetch', f);
+    await mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send to BAU' }));
+    });
+    const post = f.mock.calls.find((c) => c[0] === '/answers/HOME-9');
+    expect(post).toBeDefined();
+    expect(screen.getByText('HOME-9: sent to BAU')).toBeInTheDocument();
+    expect(f.mock.calls.filter((c) => c[0] === '/state.json')).toHaveLength(2);
+  });
+
+  it('marks not-bau with a notice', async () => {
+    const f = vi.fn((url: string) =>
+      url === '/state.json'
+        ? Promise.resolve(respond({ ...snap, schema: 2, questions: [qrow] }))
+        : Promise.resolve(respond({ ref: 'HOME-9' })),
+    );
+    vi.stubGlobal('fetch', f);
+    await mount();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Not BAU' }));
+    });
+    expect(f.mock.calls.some((c) => c[0] === '/not-bau/HOME-9')).toBe(true);
+    expect(screen.getByText('HOME-9: marked not-bau')).toBeInTheDocument();
+  });
+
+  it('lists repos waiting for the GitHub App even with no questions', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(respond({ ...snap, uninstalled: ['nakomis/a', 'nakomis/b'] })),
+    );
+    await mount();
+    expect(screen.queryByRole('heading', { name: /Questions/ })).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Waiting for the GitHub App: nakomis/a, nakomis/b'),
+    ).toBeInTheDocument();
+  });
+
+  it('refetches after a refused send so a new round appears', async () => {
+    const f = vi.fn((url: string) =>
+      url === '/state.json'
+        ? Promise.resolve(respond({ ...snap, schema: 2, questions: [qrow] }))
+        : Promise.resolve(respond({ error: 'the questions have changed' }, false, 409)),
+    );
+    vi.stubGlobal('fetch', f);
+    await mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send to BAU' }));
+    });
+    expect(screen.getByText('the questions have changed')).toBeInTheDocument();
+    expect(f.mock.calls.filter((c) => c[0] === '/state.json')).toHaveLength(2);
+  });
 });

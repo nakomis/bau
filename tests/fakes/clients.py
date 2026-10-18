@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import contextlib
+import shutil
+import tempfile
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -57,6 +60,24 @@ class FakePlane:
         self.calls.append(("set_state", (ref, state)))
         for items in self.items.values():
             items[:] = [replace(i, state=state) if i.ref == ref else i for i in items]
+
+    def _relabel(self, ref, names, add: bool):
+        delta = set(names)
+        for items in self.items.values():
+            items[:] = [
+                replace(i, labels=sorted((set(i.labels) | delta) if add else (set(i.labels) - delta)))
+                if i.ref == ref
+                else i
+                for i in items
+            ]
+
+    def add_labels(self, ref, names):
+        self.calls.append(("add_labels", (ref, names)))
+        self._relabel(ref, names, True)
+
+    def remove_labels(self, ref, names):
+        self.calls.append(("remove_labels", (ref, names)))
+        self._relabel(ref, names, False)
 
     def __getattr__(self, name):
         def record(*args, **kwargs):
@@ -145,8 +166,22 @@ class FakeRunner:
     def __init__(self, results: list[SessionResult | Exception], on_run: Callable[[], None] | None = None):
         self.results, self.briefs, self.on_run = list(results), [], on_run
 
-    def run(self, *, name, checkout, bare, brief, model, github_token, oauth_token, log_path):
+    def run(
+        self,
+        *,
+        name,
+        checkout,
+        bare,
+        brief,
+        model,
+        github_token,
+        oauth_token,
+        log_path,
+        budget_usd=None,
+        wall_clock_minutes=None,
+    ):
         self.briefs.append((name, model, brief))
+        self.overrides = {"budget_usd": budget_usd, "wall_clock_minutes": wall_clock_minutes}
         if self.on_run:
             self.on_run()
         outcome = self.results.pop(0)
@@ -177,6 +212,16 @@ class FakeRepos(Repos):
 
     def has_checkout(self, branch):
         return branch in self.checkouts
+
+    @contextlib.contextmanager
+    def scratch_clone(self, repo):
+        self.calls.append(("scratch_clone", repo))
+        self.work_root.mkdir(parents=True, exist_ok=True)
+        dest = Path(tempfile.mkdtemp(prefix="triage-", dir=self.work_root))
+        try:
+            yield dest
+        finally:
+            shutil.rmtree(dest, ignore_errors=True)
 
     def checkout_branch(self, repo, branch, token=""):
         self.calls.append(("checkout_branch", repo, branch))

@@ -26,7 +26,28 @@ export type LastRun = {
   feedback_handled: number;
   stop_reason: string;
   telemetry: string;
+  swept?: number;
+  labelled_bau?: number;
+  labelled_not_bau?: number;
+  triaged?: number;
+  asked?: number;
 };
+export type Question = { id: string; text: string; recommendation: string; why: string };
+export type QuestionRow = {
+  repo: string;
+  ref: string;
+  title: string;
+  plane_url: string;
+  repo_url: string;
+  asked_at: string;
+  age_days: number;
+  round: number;
+  summary: string;
+  questions: Question[];
+};
+export type NudgeLevel = 'ok' | 'warn' | 'down';
+export type Nudge = { level: NudgeLevel; prs: NudgeLevel; questions: NudgeLevel };
+export type Answer = { id: string; accepted: boolean; text: string };
 export type Pace = {
   five_hour_used: number;
   five_hour_resets: number;
@@ -43,5 +64,8 @@ export type Snapshot = {
   pace?: Pace | null;
   open_prs?: OpenPr[];
   deploy_pending?: DeployRow[];
+  questions?: QuestionRow[];
+  nudge?: Nudge;
+  uninstalled?: string[];
   declined?: { ref: string; reason: string; at: string }[];
 };
