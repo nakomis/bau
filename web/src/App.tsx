@@ -99,7 +99,7 @@ export default function App() {
       <Header
         tier={tier?.tier ?? null}
         generated={generated}
-        stale={snap !== null && !snap.missing && isStale(generated)}
+        stale={snap !== null && snap.missing !== true && isStale(generated)}
         paused={snap?.paused === true}
       />
       <main className="mx-auto max-w-5xl px-4 py-6">
@@ -120,7 +120,7 @@ export default function App() {
 
         {snap === null ? (
           !loadError && <p className="mt-8 text-dim">Loading…</p>
-        ) : snap.missing ? (
+        ) : snap.missing === true ? (
           <p className="mt-8 text-dim">No snapshot yet.</p>
         ) : (
           <>

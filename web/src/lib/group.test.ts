@@ -6,13 +6,13 @@ const base: OpenPr = {
   repo: 'nakomis/a',
   ref: 'A-1',
   title: 't',
-  url: 'https://gh/1',
+  url: 'https://github.com/nakomis/home-infra/pull/1',
   opened: '2026-10-13',
   age_days: 1,
   ci: 'green',
   draft: false,
   unresolved_comments: 0,
-  plane_url: 'https://plane/A-1',
+  plane_url: 'https://plane.home.nakomis.com/nakomis/browse/A-1/',
 };
 const pr = (o: Partial<OpenPr>): OpenPr => ({ ...base, ...o });
 

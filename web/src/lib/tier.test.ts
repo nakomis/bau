@@ -9,13 +9,13 @@ const pr = (i: number): OpenPr => ({
   repo: 'nakomis/x',
   ref: `X-${i}`,
   title: 't',
-  url: 'https://gh/1',
+  url: 'https://github.com/nakomis/home-infra/pull/1',
   opened: '2026-10-13',
   age_days: 1,
   ci: 'green',
   draft: false,
   unresolved_comments: 0,
-  plane_url: 'https://plane/X',
+  plane_url: 'https://plane.home.nakomis.com/nakomis/browse/X/',
 });
 
 const snap = (n: number, extra: Partial<Snapshot> = {}): Snapshot => ({
@@ -82,6 +82,21 @@ describe('computeTier', () => {
     const r = computeTier({ schema: 1, missing: true }, null, NOW);
     expect(r.tier).toBe('amber');
     expect(r.reasons).toHaveLength(1);
+  });
+
+  it('only an explicit missing:true means no snapshot', () => {
+    const r = computeTier({ schema: 1, missing: 'yes' } as unknown as Snapshot, null, NOW);
+    expect(r.tier).toBe('red');
+  });
+
+  it('accepts the producer microsecond timestamp', () => {
+    const r = computeTier(snap(0, { generated_at: '2026-10-14T11:00:00.123456Z' }), null, NOW);
+    expect(r.tier).toBe('green');
+  });
+
+  it('a non-string stop reason is no reason', () => {
+    const bad = { ...run('ok'), stop_reason: { x: 1 } } as unknown as ReturnType<typeof run>;
+    expect(computeTier(snap(0, { last_run: bad }), null, NOW).tier).toBe('green');
   });
 
   it('is amber when telemetry is missing', () => {

@@ -50,6 +50,23 @@ describe('isStale', () => {
     expect(isStale('2026-10-13T10:00:00Z', now)).toBe(false);
     expect(isStale('2026-10-13T09:59:59Z', now)).toBe(true);
   });
+  it('accepts the producers microsecond timestamps', () => {
+    expect(isStale('2026-10-14T11:48:00.123456Z', now)).toBe(false);
+    expect(isStale('2026-10-13T09:00:00.123456Z', now)).toBe(true);
+    expect(isStale('2026-10-14T12:48:00.5+01:00', now)).toBe(false);
+  });
+  it('requires strict RFC 3339, as BD-1 does', () => {
+    for (const loose of [
+      '2026-10-14',
+      '2026-10-14 11:48:00Z',
+      '2026-10-14T11:48:00',
+      '2026-10-14T11:48Z',
+      'Tue, 14 Oct 2026 11:48:00 GMT',
+      '1791978480',
+    ]) {
+      expect(isStale(loose, now)).toBe(true);
+    }
+  });
   it('treats an absent or unparseable timestamp as stale, as BD-1 does', () => {
     expect(isStale('nonsense', now)).toBe(true);
     expect(isStale('', now)).toBe(true);
@@ -121,12 +138,29 @@ describe('api helpers', () => {
 
 describe('safeHref', () => {
   it('allows only https URLs', () => {
-    expect(safeHref('https://gh/pull/7')).toBe('https://gh/pull/7');
+    expect(safeHref('https://github.com/nakomis/home-infra/pull/7')).toBe(
+      'https://github.com/nakomis/home-infra/pull/7',
+    );
     expect(safeHref('javascript:alert(1)')).toBeUndefined();
     expect(safeHref('data:text/html,x')).toBeUndefined();
     expect(safeHref('http://x')).toBeUndefined();
     expect(safeHref('not a url')).toBeUndefined();
     expect(safeHref(undefined)).toBeUndefined();
+  });
+
+  it('allows only GitHub and Plane hosts', () => {
+    const plane = 'https://plane.home.nakomis.com/nakomis/browse/HOME-42/';
+    expect(safeHref(plane)).toBe(plane);
+    for (const bad of [
+      'https://example.com/x',
+      'https://github.com.evil.example/x',
+      'https://evil.example/github.com',
+      'https://github.com@evil.example/x',
+      'https://gist.github.com/x',
+      'https://plane.home.nakomis.com.evil.example/x',
+    ]) {
+      expect(safeHref(bad)).toBeUndefined();
+    }
   });
 });
 
@@ -149,11 +183,22 @@ describe('snapshot hardening', () => {
     );
   });
 
-  it('treats a non-object body as a missing snapshot', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => 'oops' }));
-    expect(await fetchState()).toEqual({ schema: 1, missing: true });
-    expect(normaliseSnapshot(null)).toEqual({ schema: 1, missing: true });
-    expect(normaliseSnapshot([1])).toEqual({ schema: 1, missing: true });
+  it('rejects a body that is not an object, so the page goes red', async () => {
+    for (const body of ['oops', [], null, 3]) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => body }));
+      await expect(fetchState()).rejects.toThrow('not a snapshot object');
+    }
+    expect(() => normaliseSnapshot(null)).toThrow();
+    expect(() => normaliseSnapshot([1])).toThrow();
+  });
+
+  it('keeps an explicit missing snapshot as it is', () => {
+    expect(normaliseSnapshot({ schema: 1, missing: true }).missing).toBe(true);
+  });
+
+  it('drops a non-string stop reason rather than rendering it', () => {
+    const s = normaliseSnapshot({ schema: 1, last_run: { stop_reason: { a: 1 } } });
+    expect(s.last_run?.stop_reason).toBe('');
   });
 
   it('treats non-array lists as empty', () => {
@@ -224,7 +269,18 @@ describe('isFailedStop', () => {
     for (const r of ['failed: SystemExit: 143', 'failed', 'preflight: Timeout', 'rejected']) {
       expect(isFailedStop(r)).toBe(true);
     }
-    for (const r of ['ok', 'cutoff', 'no work', '', undefined, 'unrejected']) {
+    for (const r of [
+      'ok',
+      'cutoff',
+      'no work',
+      '',
+      undefined,
+      'unrejected',
+      7,
+      null,
+      {},
+      ['failed'],
+    ]) {
       expect(isFailedStop(r)).toBe(false);
     }
   });

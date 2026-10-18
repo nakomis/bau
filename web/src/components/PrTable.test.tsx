@@ -7,13 +7,13 @@ const row: OpenPr = {
   repo: 'nakomis/home-infra',
   ref: 'HOME-42',
   title: 'Rotate logs',
-  url: 'https://gh/pull/7',
+  url: 'https://github.com/nakomis/home-infra/pull/7',
   opened: '2026-10-15',
   age_days: 0,
   ci: 'green',
   draft: false,
   unresolved_comments: 2,
-  plane_url: 'https://plane/HOME-42',
+  plane_url: 'https://plane.home.nakomis.com/nakomis/browse/HOME-42/',
 };
 
 describe('PrTable', () => {
@@ -22,11 +22,11 @@ describe('PrTable', () => {
     expect(screen.getByText('today')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /HOME-42/ })).toHaveAttribute(
       'href',
-      'https://gh/pull/7',
+      'https://github.com/nakomis/home-infra/pull/7',
     );
     expect(screen.getByRole('link', { name: /Plane/ })).toHaveAttribute(
       'href',
-      'https://plane/HOME-42',
+      'https://plane.home.nakomis.com/nakomis/browse/HOME-42/',
     );
     expect(screen.getByText('2 unresolved')).toBeInTheDocument();
     expect(screen.getByTitle('green')).toBeInTheDocument();

@@ -27,11 +27,14 @@ export function computeTier(
   // BD-1: no reachable endpoint is red.
   if (fetchError !== null) add('red', `State could not be loaded: ${fetchError}`);
 
-  if (snap?.missing) {
+  if (snap?.missing === true) {
     add('amber', 'No snapshot has been published yet');
   } else if (snap) {
     if (isStale(snap.generated_at, now)) {
-      add('red', 'The snapshot is stale (older than 26 hours, or its timestamp is unusable)');
+      add(
+        'red',
+        'The snapshot is stale (older than 26 hours, dated in the future, or its timestamp is unusable)',
+      );
     }
     const run = snap.last_run;
     if (run && isFailedStop(run.stop_reason)) {
