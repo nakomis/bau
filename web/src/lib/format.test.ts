@@ -4,10 +4,12 @@ import {
   ageLabel,
   fetchState,
   isStale,
+  markNotBau,
   normaliseSnapshot,
   pct,
   relativeTime,
   safeHref,
+  submitAnswers,
 } from './format';
 
 describe('ageLabel', () => {
@@ -148,5 +150,60 @@ describe('snapshot hardening', () => {
     expect(s.open_prs).toEqual([]);
     expect(s.deploy_pending).toEqual([]);
     expect(s.declined).toEqual([]);
+  });
+});
+
+describe('submitAnswers and markNotBau', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('posts the answers with round and asked_at', async () => {
+    const f = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ ref: 'X-1' }) });
+    vi.stubGlobal('fetch', f);
+    const answers = [{ id: 'q1', accepted: true, text: 'Yes' }];
+    await submitAnswers('X-1', 2, '2026-10-14T01:00:00Z', answers);
+    expect(f.mock.calls[0][0]).toBe('/answers/X-1');
+    expect(f.mock.calls[0][1].method).toBe('POST');
+    expect(JSON.parse(f.mock.calls[0][1].body)).toEqual({
+      round: 2,
+      asked_at: '2026-10-14T01:00:00Z',
+      answers,
+    });
+  });
+
+  it('throws the API error text, or a status message for non-JSON', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: false, status: 409, json: async () => ({ error: 'stale' }) }),
+    );
+    await expect(submitAnswers('X-1', 1, 'a', [])).rejects.toThrow('stale');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: async () => {
+          throw new SyntaxError('x');
+        },
+      }),
+    );
+    await expect(markNotBau('X-1', '')).rejects.toThrow('not-bau failed (502)');
+  });
+
+  it('posts the not-bau note', async () => {
+    const f = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ ref: 'X-1' }) });
+    vi.stubGlobal('fetch', f);
+    await markNotBau('X-1', 'nope');
+    expect(f.mock.calls[0][0]).toBe('/not-bau/X-1');
+    expect(JSON.parse(f.mock.calls[0][1].body)).toEqual({ note: 'nope' });
+  });
+
+  it('normalises absent questions and uninstalled to empty lists', () => {
+    const s = normaliseSnapshot({ schema: 2 });
+    expect(s.questions).toEqual([]);
+    expect(s.uninstalled).toEqual([]);
   });
 });

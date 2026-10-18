@@ -1,4 +1,4 @@
-import type { Snapshot } from '../types';
+import type { Answer, Snapshot } from '../types';
 
 export const STALE_HOURS = 26;
 
@@ -53,6 +53,8 @@ export function normaliseSnapshot(raw: unknown): Snapshot {
     open_prs: list(s.open_prs),
     deploy_pending: list(s.deploy_pending),
     declined: list(s.declined),
+    questions: list(s.questions),
+    uninstalled: list(s.uninstalled),
   };
 }
 
@@ -83,4 +85,34 @@ export async function abandon(ref: string, note: string): Promise<string> {
   }
   if (!r.ok) throw new Error(body.error ?? `abandon failed (${r.status})`);
   return body.restored_state ?? 'its previous state';
+}
+
+async function post(path: string, payload: unknown, what: string): Promise<void> {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  let body: { error?: string } = {};
+  try {
+    body = await r.json();
+  } catch {
+    // non-JSON body; fall through to the status-based message
+  }
+  if (!r.ok) throw new Error(body.error ?? `${what} failed (${r.status})`);
+}
+
+/** POST /answers/{ref}; accepted answers carry the recommendation text verbatim. */
+export function submitAnswers(
+  ref: string,
+  round: number,
+  asked_at: string,
+  answers: Answer[],
+): Promise<void> {
+  return post(`/answers/${encodeURIComponent(ref)}`, { round, asked_at, answers }, 'send');
+}
+
+/** POST /not-bau/{ref}. */
+export function markNotBau(ref: string, note: string): Promise<void> {
+  return post(`/not-bau/${encodeURIComponent(ref)}`, { note }, 'not-bau');
 }

@@ -2,8 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import DeployList from './components/DeployList';
 import LastRun from './components/LastRun';
 import PrTable from './components/PrTable';
-import { abandon, fetchState, isStale, relativeTime } from './lib/format';
-import type { Snapshot } from './types';
+import Questions from './components/Questions';
+import {
+  abandon,
+  fetchState,
+  isStale,
+  markNotBau,
+  relativeTime,
+  submitAnswers,
+} from './lib/format';
+import type { Answer, Snapshot } from './types';
 
 const MAX_NOTICES = 5;
 const REFRESH_MS = 5 * 60 * 1000;
@@ -38,18 +46,38 @@ export default function App() {
     return () => clearInterval(id);
   }, [refresh]);
 
+  const notify = useCallback((text: string) => {
+    noticeId.current += 1;
+    const id = noticeId.current;
+    setNotices((n) => [...n, { id, text }].slice(-MAX_NOTICES));
+  }, []);
+
   const onAbandon = useCallback(
     async (ref: string, note: string) => {
       const restored = await abandon(ref, note);
-      noticeId.current += 1;
-      const id = noticeId.current;
-      setNotices((n) =>
-        [...n, { id, text: `${ref}: restored to ${restored}` }].slice(-MAX_NOTICES),
-      );
+      notify(`${ref}: restored to ${restored}`);
       void refresh();
       return restored;
     },
-    [refresh],
+    [refresh, notify],
+  );
+
+  const onSend = useCallback(
+    async (ref: string, round: number, askedAt: string, answers: Answer[]) => {
+      await submitAnswers(ref, round, askedAt, answers);
+      notify(`${ref}: sent to BAU`);
+      void refresh();
+    },
+    [refresh, notify],
+  );
+
+  const onNotBau = useCallback(
+    async (ref: string) => {
+      await markNotBau(ref, '');
+      notify(`${ref}: marked not-bau`);
+      void refresh();
+    },
+    [refresh, notify],
   );
 
   const generated = snap?.generated_at;
@@ -98,6 +126,13 @@ export default function App() {
         <p className="mt-8 text-neutral-500">No snapshot yet.</p>
       ) : (
         <>
+          <Questions
+            rows={snap.questions ?? []}
+            level={snap.nudge?.questions ?? 'ok'}
+            uninstalled={snap.uninstalled ?? []}
+            onSend={onSend}
+            onNotBau={onNotBau}
+          />
           <Section title="Awaiting review">
             <PrTable rows={prs} onAbandon={onAbandon} />
           </Section>
