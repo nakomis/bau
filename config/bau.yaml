@@ -5,7 +5,6 @@ paused: false
 schedule:
   no_new_sessions_after: "05:00"
   timezone: Europe/London
-  sweep_no_new_sessions_after: "00:50"  # the monthly sweep must not eat into the night
 
 limits:
   pace_margin: 0.10

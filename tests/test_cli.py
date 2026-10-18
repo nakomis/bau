@@ -271,95 +271,6 @@ def test_cli_abandon_invalid_ref_exits_2(capsys):
     assert "invalid ref" in capsys.readouterr().out
 
 
-def test_sweep_subcommand_and_first_sunday_gate(monkeypatch):
-    from datetime import date
-
-    from bau import cli
-
-    p = cli.build_parser()
-    a = p.parse_args(["sweep", "--force", "--dry-run"])
-    assert a.force is True and a.dry_run is True
-    assert p.parse_args(["sweep"]).force is False
-    monkeypatch.setattr(cli, "today", lambda: date(2026, 11, 8))
-    assert cli.sweep_due(force=False) is False
-    assert cli.sweep_due(force=True) is True
-    monkeypatch.setattr(cli, "today", lambda: date(2026, 11, 1))
-    assert cli.sweep_due(force=False) is True
-
-
-class StubSweep:
-    instances: list = []
-    outcome: BaseException | None = None
-
-    def __init__(self, *args, **kwargs):
-        from bau.sweep import SweepReport
-
-        self.args, self.kwargs = args, kwargs
-        self.report = SweepReport(projects=2, sessions=2, candidates=3, summary_ref="BAU-7")
-        StubSweep.instances.append(self)
-
-    def run(self):
-        if StubSweep.outcome is not None:
-            raise StubSweep.outcome
-        return self.report
-
-
-@pytest.fixture
-def sweep_world(run_world, monkeypatch):
-    from datetime import date
-
-    StubSweep.instances, StubSweep.outcome = [], None
-    monkeypatch.setattr(run_world.cli, "Sweep", StubSweep)
-    monkeypatch.setattr(run_world.cli, "today", lambda: date(2026, 11, 1))
-    monkeypatch.setattr(run_world.cli, "SWEEP_LOCK_WAIT", 0)
-    monkeypatch.setattr(run_world.cli, "RUN_LOCK_WAIT", 0)
-    run_world.cfg.identities = SimpleNamespace()
-    run_world.cfg.limits = SimpleNamespace(session_wall_clock_minutes=60, sweep_session_wall_clock_minutes=15)
-    return run_world
-
-
-def _sweep(w, *extra):
-    return w.cli.main(["sweep", "--config", str(w.config_dir), *extra])
-
-
-def test_sweep_does_nothing_off_the_first_sunday(sweep_world, monkeypatch, capsys):
-    from datetime import date
-
-    monkeypatch.setattr(sweep_world.cli, "today", lambda: date(2026, 11, 8))
-    assert _sweep(sweep_world) == 0
-    assert "not the first Sunday; nothing to do" in capsys.readouterr().out
-    assert StubSweep.instances == []
-
-
-def test_sweep_force_runs_prints_a_report_and_never_writes_the_snapshot(sweep_world, monkeypatch, capsys):
-    from datetime import date
-
-    monkeypatch.setattr(sweep_world.cli, "today", lambda: date(2026, 11, 8))
-    assert _sweep(sweep_world, "--force", "--dry-run") == 0
-    assert StubSweep.instances[0].kwargs["dry_run"] is True
-    out = capsys.readouterr().out
-    assert "BAU-7" in out and "3 candidate(s)" in out and "stop reason ok" in out
-    assert not sweep_world.snapshot.exists()
-
-
-def test_sweep_gives_up_quietly_when_the_lock_stays_held(sweep_world, capsys):
-    import fcntl
-
-    lock = sweep_world.cfg.paths.logs.parent / "run.lock"
-    with open(lock, "a") as held:
-        fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        assert _sweep(sweep_world) == 0
-    assert StubSweep.instances == []
-    assert "lock" in capsys.readouterr().out
-
-
-def test_sweep_failure_exits_one_with_type_and_message(sweep_world, capsys):
-    StubSweep.outcome = RuntimeError("plane down")
-    assert _sweep(sweep_world) == 1
-    err = capsys.readouterr().err
-    assert "RuntimeError: plane down" in err and "Traceback" not in err
-
-
 def test_run_that_cannot_get_the_lock_writes_a_locked_snapshot(run_world, monkeypatch, capsys):
     import fcntl
 
@@ -375,7 +286,7 @@ def test_run_that_cannot_get_the_lock_writes_a_locked_snapshot(run_world, monkey
     assert StubNight.instances == []
 
 
-def test_run_waits_up_to_an_hour_and_sweep_up_to_half(run_world, monkeypatch):
+def test_run_waits_up_to_an_hour(run_world, monkeypatch):
     seen = []
 
     from contextlib import contextmanager
@@ -387,31 +298,5 @@ def test_run_waits_up_to_an_hour_and_sweep_up_to_half(run_world, monkeypatch):
 
     monkeypatch.setattr(run_world.cli, "run_lock", spy)
     run_world.cfg.identities = SimpleNamespace()
-    monkeypatch.setattr(run_world.cli, "Sweep", StubSweep)
     run_world.cli.main(["run", "--config", str(run_world.config_dir)])
-    run_world.cli.main(["sweep", "--force", "--config", str(run_world.config_dir)])
-    assert seen == [3600, 1800]
-
-
-def test_sweep_runner_uses_the_sweep_wall_clock(sweep_world):
-    assert _sweep(sweep_world, "--force") == 0
-    runner = StubSweep.instances[0].args[3]
-    assert runner.wall_clock_minutes == sweep_world.cfg.limits.sweep_session_wall_clock_minutes == 15
-
-
-def test_sweep_exit_code_follows_the_stop_reason(sweep_world):
-    from bau.sweep import SweepReport
-
-    real = StubSweep.__init__
-
-    def init(self, *a, **k):
-        real(self, *a, **k)
-        self.report = SweepReport(stop_reason=StubSweep.reason)
-
-    StubSweep.__init__ = init
-    try:
-        for reason, code in (("sweep-cutoff", 0), ("cutoff", 0), ("telemetry-missing", 1)):
-            StubSweep.reason = reason
-            assert _sweep(sweep_world, "--force") == code
-    finally:
-        StubSweep.__init__ = real
+    assert seen == [3600]

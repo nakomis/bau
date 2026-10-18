@@ -115,10 +115,13 @@ class SessionRunner:
         github_token: str,
         oauth_token: str,
         log_path: Path,
+        budget_usd: float | None = None,
+        wall_clock_minutes: int | None = None,
     ) -> SessionResult:
         for token in (github_token, oauth_token):
             if "\n" in token or "\r" in token:
                 raise ValueError("session tokens must not contain newlines")
+        wall_clock = wall_clock_minutes * 60 if wall_clock_minutes else self.wall_clock_seconds
         log_path.parent.mkdir(parents=True, exist_ok=True)
         fd, env_file = tempfile.mkstemp(prefix="bau-env-")
         try:
@@ -134,7 +137,7 @@ class SessionRunner:
                 checkout=checkout,
                 bare=bare,
                 model=model,
-                budget=self.cfg.limits.session_budget_usd,
+                budget=budget_usd if budget_usd is not None else self.cfg.limits.session_budget_usd,
                 env_file=env_file,
                 docker=self.docker,
             )
@@ -155,7 +158,7 @@ class SessionRunner:
 
             def watchdog():
                 while proc.poll() is None:
-                    if self.monotonic() - started > self.wall_clock_seconds:
+                    if self.monotonic() - started > wall_clock:
                         nonlocal killed
                         killed = killed or "killed_wall_clock"
                         self._kill(name)

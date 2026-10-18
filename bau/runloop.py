@@ -5,6 +5,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from bau.checkout import Repos
 from bau.config import Config, Models, ProjectConfig
@@ -76,6 +77,9 @@ class NightReport:
     latest: RateLimit | None = None
     telemetry: str = "ok"
     planned: list[str] = field(default_factory=list)
+    swept: int = 0
+    labelled_bau: int = 0
+    labelled_not_bau: int = 0
 
 
 class Night:
@@ -196,16 +200,45 @@ class Night:
         return d.allowed
 
     def session(self, *, item: Item, repo: str, branch: str, brief: str, model: str) -> SessionResult:
-        self.report.sessions += 1
-        result = self.runner.run(
+        return self.agent_session(
             name=f"bau-{item.ref.lower()}",
             checkout=self.repos.checkout_path(branch),
             bare=self.repos.bare_path(repo),
             brief=brief,
             model=model,
+            log_name=item.ref,
             github_token=self.token(repo),
+        )
+
+    def agent_session(
+        self,
+        *,
+        name: str,
+        checkout: Path,
+        bare: Path | None,
+        brief: str,
+        model: str,
+        log_name: str,
+        github_token: str = "",
+        budget_usd: float | None = None,
+        wall_clock_minutes: int | None = None,
+    ) -> SessionResult:
+        self.report.sessions += 1
+        extra = {}
+        if budget_usd is not None:
+            extra["budget_usd"] = budget_usd
+        if wall_clock_minutes is not None:
+            extra["wall_clock_minutes"] = wall_clock_minutes
+        result = self.runner.run(
+            name=name,
+            checkout=checkout,
+            bare=bare,
+            brief=brief,
+            model=model,
+            github_token=github_token,
             oauth_token=self.oauth_token,
-            log_path=self.cfg.paths.logs / f"{self.clock():%Y-%m-%d}-{item.ref}.log",
+            log_path=self.cfg.paths.logs / f"{self.clock():%Y-%m-%d}-{log_name}.log",
+            **extra,
         )
         # The newest reading wins, even when it is "none": a stale figure must not keep the night going.
         self.report.latest = result.latest

@@ -48,7 +48,6 @@ class Nudge:
 class Schedule:
     no_new_sessions_after: time
     timezone: str
-    sweep_no_new_sessions_after: time
 
 
 @dataclass(frozen=True)
@@ -145,7 +144,6 @@ def load_config(path: Path) -> Config:
         schedule=Schedule(
             _time(raw["schedule"]["no_new_sessions_after"]),
             raw["schedule"]["timezone"],
-            _time(raw["schedule"]["sweep_no_new_sessions_after"]),
         ),
         limits=Limits(**raw["limits"]),
         models=Models(**raw["models"]),

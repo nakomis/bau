@@ -149,8 +149,22 @@ class FakeRunner:
     def __init__(self, results: list[SessionResult | Exception], on_run: Callable[[], None] | None = None):
         self.results, self.briefs, self.on_run = list(results), [], on_run
 
-    def run(self, *, name, checkout, bare, brief, model, github_token, oauth_token, log_path):
+    def run(
+        self,
+        *,
+        name,
+        checkout,
+        bare,
+        brief,
+        model,
+        github_token,
+        oauth_token,
+        log_path,
+        budget_usd=None,
+        wall_clock_minutes=None,
+    ):
         self.briefs.append((name, model, brief))
+        self.overrides = {"budget_usd": budget_usd, "wall_clock_minutes": wall_clock_minutes}
         if self.on_run:
             self.on_run()
         outcome = self.results.pop(0)

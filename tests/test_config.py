@@ -7,8 +7,7 @@ from bau.config import Limits, Nudge, ProjectConfig, load_config, load_projects,
 
 MINIMAL = """
 paused: false
-schedule: {no_new_sessions_after: "05:00", timezone: Europe/London,
-          sweep_no_new_sessions_after: "00:50"}
+schedule: {no_new_sessions_after: "05:00", timezone: Europe/London}
 limits: {pace_margin: 0.10, five_hour_kill: 0.80,
          session_wall_clock_minutes: 60, session_budget_usd: 5.0,
          fail_closed_sessions: 2, ci_fix_sessions_per_pr: 3,
@@ -40,7 +39,6 @@ def test_loads_every_section(tmp_path: Path):
     cfg = load_config(p)
     assert cfg.paused is False
     assert cfg.schedule.no_new_sessions_after == time(5, 0)
-    assert cfg.schedule.sweep_no_new_sessions_after == time(0, 50)
     assert cfg.limits.sweep_session_wall_clock_minutes == 15
     assert cfg.limits == Limits(0.10, 0.80, 60, 5.0, 2, 3, 15, 400, 15, 1.25, 10, 4, 7, 40)
     assert cfg.models.fable_label == "BAU-fable"
