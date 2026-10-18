@@ -723,6 +723,50 @@ def test_failed_then_one_retry_then_skipped(cfg, tmp_path):
     assert report.sessions == 0 and report.declined[0]["reason"] == TRIED_TWICE
 
 
+def test_usage_limit_stops_do_not_count_towards_the_cap(cfg, tmp_path):
+    plane = TriagedPlane({"HOME": [item(state="Ready")]})
+    one_night(cfg, plane, tmp_path, SessionResult("rate_limited", "429", good_rl(), 0.1, ""))
+    one_night(cfg, plane, tmp_path, SessionResult("killed_five_hour", "5h at 95%", good_rl(), 0.1, ""))
+    texts = [c.text for c in plane.comments("HOME-42")]
+    assert "[bau] Session paused by usage limit (rate_limited): 429" in texts
+    assert "[bau] Session paused by usage limit (killed_five_hour): 5h at 95%" in texts
+    assert not any("Session ended with" in t for t in texts)
+    report, runner = one_night(cfg, plane, tmp_path, FAILED)
+    assert report.sessions == 1 and "PREVIOUS ATTEMPT" not in runner.briefs[0][2]
+
+
+def test_old_session_ended_usage_limit_comments_do_not_count(cfg, tmp_path):
+    old = [
+        Comment(f"o{n}", "bau@nakomis.com", "", f"[bau] Session ended with {outcome}: x")
+        for n, outcome in enumerate(("rate_limited", "killed_five_hour"))
+    ]
+    plane = TriagedPlane({"HOME": [item(state="Ready")]}, {"HOME-42": old})
+    report, _ = one_night(cfg, plane, tmp_path, FAILED)
+    assert report.sessions == 1
+
+
+def test_wall_clock_kills_still_count_towards_the_cap(cfg, tmp_path):
+    plane = TriagedPlane({"HOME": [item(state="Ready")]})
+    for _ in range(2):
+        one_night(cfg, plane, tmp_path, SessionResult("killed_wall_clock", "1h", good_rl(), 0.1, ""))
+    report, runner = one_night(cfg, plane, tmp_path)
+    assert report.sessions == 0 and report.declined[0]["reason"] == TRIED_TWICE
+
+
+def test_tried_twice_hands_the_ticket_back(cfg, tmp_path):
+    plane = TriagedPlane({"HOME": [item(state="Ready")]})
+    one_night(cfg, plane, tmp_path, FAILED)
+    one_night(cfg, plane, tmp_path, FAILED)
+    held = plane.get_item("HOME-42")
+    assert held.state == "In progress" and held.assignees == ["bau@nakomis.com"]
+    one_night(cfg, plane, tmp_path)
+    back = plane.get_item("HOME-42")
+    assert back.state == "Ready" and back.assignees == []
+    plane.calls.clear()
+    report, _ = one_night(cfg, plane, tmp_path)  # already handed back: no further writes
+    assert report.declined[0]["reason"] == TRIED_TWICE and plane.calls == []
+
+
 def test_owner_comment_after_two_failures_allows_another_attempt(cfg, tmp_path):
     plane = TriagedPlane({"HOME": [item(state="Ready")]})
     one_night(cfg, plane, tmp_path, FAILED)

@@ -61,6 +61,18 @@ class FakePlane:
         for items in self.items.values():
             items[:] = [replace(i, state=state) if i.ref == ref else i for i in items]
 
+    def _reassign(self, ref, assignees):
+        for items in self.items.values():
+            items[:] = [replace(i, assignees=assignees) if i.ref == ref else i for i in items]
+
+    def assign(self, ref, email):
+        self.calls.append(("assign", (ref, email)))
+        self._reassign(ref, [email])
+
+    def unassign(self, ref):
+        self.calls.append(("unassign", (ref,)))
+        self._reassign(ref, [])
+
     def _relabel(self, ref, names, add: bool):
         delta = set(names)
         for items in self.items.values():
