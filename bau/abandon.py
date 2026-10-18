@@ -110,8 +110,9 @@ def _abandon(ref, plane, github_factory, repos, projects, worker_login, worker_e
     branch = None
     for pr in gh.open_prs(repo, worker_login):
         if Night.ref_of(pr) == ref and pr.head_ref.startswith(ref.lower() + "-"):
-            gh.comment(repo, pr.number, "[bau] Abandoned by Martin from the BAU dashboard." + suffix)
+            # Close first: a retry after a failed close must not post the comment twice.
             gh.close_pr(repo, pr.number)
+            gh.comment(repo, pr.number, "[bau] Abandoned by Martin from the BAU dashboard." + suffix)
             pr_number, branch = pr.number, pr.head_ref
             break
     if branch is None:

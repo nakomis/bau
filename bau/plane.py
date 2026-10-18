@@ -39,12 +39,13 @@ class Comment:
     text: str
 
 
-_CODE = re.compile(r"<code>(.*?)</code>", re.IGNORECASE | re.DOTALL)
-_STRONG = re.compile(r"<strong>(.*?)</strong>", re.IGNORECASE | re.DOTALL)
+_CODE = re.compile(r"<code\b[^>]*>(.*?)</code>", re.IGNORECASE | re.DOTALL)
+_STRONG = re.compile(r"<strong\b[^>]*>(.*?)</strong>", re.IGNORECASE | re.DOTALL)
 
 
 def html_to_text(value: str | None) -> str:
-    # Plane keeps <code> and <strong>; map them back so markers like `branch` survive the round trip.
+    # Plane keeps <code> and <strong>, possibly with attributes; map them back so markers like `branch`
+    # survive the round trip.
     text = _CODE.sub(r"`\1`", value or "")
     text = _STRONG.sub(r"**\1**", text)
     text = _BLOCK_END.sub("\n", text)
