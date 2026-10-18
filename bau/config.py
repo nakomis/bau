@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import time
@@ -93,6 +94,7 @@ class Paths:
     work: Path
     logs: Path
     snapshot: Path
+    pause_file: Path
 
 
 @dataclass(frozen=True)
@@ -168,12 +170,15 @@ def load_config(path: Path) -> Config:
     )
 
 
-def paused_reader(path: Path, initial: bool) -> Callable[[], bool]:
-    """Re-read only the `paused` flag, so a pause takes effect before the next session. True only
-    for a literal YAML `true`; a file that will not parse keeps the last value seen."""
+def paused_reader(path: Path, initial: bool, pause_file: Path) -> Callable[[], bool]:
+    """Re-read the pause sources, so a pause takes effect before the next session. Paused when
+    `pause_file` exists (its contents, if any, are the reason, logged to stderr once per change)
+    or when `bau.yaml` holds a literal YAML `true`; a YAML file that will not parse keeps the last
+    value seen."""
     last = [initial]
+    logged: list[str | None] = [None]
 
-    def read() -> bool:
+    def read_yaml() -> bool:
         try:
             raw = yaml.safe_load(Path(path).read_text())
         except (OSError, yaml.YAMLError):
@@ -182,6 +187,20 @@ def paused_reader(path: Path, initial: bool) -> Callable[[], bool]:
             return last[0]
         last[0] = raw.get("paused") is True
         return last[0]
+
+    def read() -> bool:
+        from_yaml = read_yaml()
+        try:
+            reason = Path(pause_file).read_text(errors="replace").strip()
+        except FileNotFoundError:
+            logged[0] = None
+            return from_yaml
+        except OSError:
+            reason = "(unreadable)"
+        if reason != logged[0]:
+            print(f"bau: paused by {pause_file}: {reason or '(no reason given)'}", file=sys.stderr)
+            logged[0] = reason
+        return True
 
     return read
 

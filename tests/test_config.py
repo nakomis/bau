@@ -29,7 +29,8 @@ plane: {url: https://plane.home.nakomis.com, workspace: nakomis,
         client_cert: ~/.config/bau/cere.crt.pem, client_key: ~/.config/bau/cere.key.pem}
 claude: {oauth_token: {service: bau, account: claude-oauth-token}}
 paths: {repos: /Users/nakomis/bau/repos, work: /Users/nakomis/bau/work,
-        logs: /Users/nakomis/bau/logs, snapshot: /Users/nakomis/bau/state.json}
+        logs: /Users/nakomis/bau/logs, snapshot: /Users/nakomis/bau/state.json,
+        pause_file: /Users/nakomis/bau/paused}
 container: {image: bau-agent:latest, network: bau-net, proxy: http://bau-egress:8888}
 """
 
@@ -46,6 +47,7 @@ def test_loads_every_section(tmp_path: Path):
     assert cfg.github_app.private_key.account == "github-app-key"
     assert cfg.plane.client_cert == Path("~/.config/bau/cere.crt.pem").expanduser()
     assert cfg.paths.snapshot == Path("/Users/nakomis/bau/state.json")
+    assert cfg.paths.pause_file == Path("/Users/nakomis/bau/paused")
     assert cfg.container.proxy == "http://bau-egress:8888"
 
 
@@ -95,7 +97,7 @@ def test_paused_is_only_a_literal_yaml_true(tmp_path: Path, value, expected):
 def test_paused_reader_rereads_the_flag_and_keeps_the_last_value_on_a_bad_file(tmp_path: Path):
     p = tmp_path / "bau.yaml"
     p.write_text(MINIMAL)
-    read = paused_reader(p, initial=False)
+    read = paused_reader(p, initial=False, pause_file=tmp_path / "paused")
     assert read() is False
     p.write_text(MINIMAL.replace("paused: false", "paused: true"))
     assert read() is True
@@ -104,6 +106,36 @@ def test_paused_reader_rereads_the_flag_and_keeps_the_last_value_on_a_bad_file(t
     p.write_text(MINIMAL.replace("paused: false", "paused: 'true'"))
     assert read() is False
     p.unlink()
+    assert read() is False
+
+
+def test_paused_reader_treats_the_pause_file_as_paused_and_logs_its_reason(tmp_path: Path, capsys):
+    p = tmp_path / "bau.yaml"
+    p.write_text(MINIMAL)
+    flag = tmp_path / "paused"
+    read = paused_reader(p, initial=False, pause_file=flag)
+    assert read() is False
+    flag.write_text("away until Monday\n")
+    assert read() is True
+    assert read() is True
+    assert capsys.readouterr().err.count("away until Monday") == 1
+    flag.write_text("")
+    assert read() is True
+    assert "(no reason given)" in capsys.readouterr().err
+    flag.unlink()
+    assert read() is False
+
+
+def test_paused_reader_pauses_on_either_source(tmp_path: Path):
+    p = tmp_path / "bau.yaml"
+    p.write_text(MINIMAL.replace("paused: false", "paused: true"))
+    flag = tmp_path / "paused"
+    read = paused_reader(p, initial=False, pause_file=flag)
+    assert read() is True
+    flag.touch()
+    p.write_text(MINIMAL)
+    assert read() is True
+    flag.unlink()
     assert read() is False
 
 

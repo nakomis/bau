@@ -96,9 +96,16 @@ It shares `~/bau/run.lock` with the nightly run and `bau abandon`. The sweep wai
 
 ## Pause
 
-Set `paused: true` in `config/bau.yaml` to stop new sessions. Policy refuses to start work while it is set. Set it back to `false` to resume.
+```bash
+echo "away until Monday" > ~/bau/paused   # or just: touch ~/bau/paused
+rm ~/bau/paused                           # resume
+```
 
-A running `bau run` re-reads the `paused` flag before every session, so a pause takes effect before the next session starts; a session already in progress runs to its end. Only a literal `paused: true` pauses (not `yes`, `"true"` or `1`). If `bau.yaml` fails to parse mid-run, the run keeps the last value it read. Merged PRs are still closed out and green drafts still marked ready while paused, since neither starts a session. For an immediate stop, see "Stop a run now".
+While `~/bau/paused` (`paths.pause_file` in `config/bau.yaml`) exists, policy refuses to start new sessions. Its contents, if any, are the reason; `bau` logs it to stderr (the run log) when it first sees the pause. The file lives outside the checkout, so pausing leaves `~/bau/src` clean and the Cere playbook can still update it.
+
+`paused: true` in `config/bau.yaml` still pauses too, but it dirties the checkout; prefer the file.
+
+A running `bau run` re-reads both the pause file and the `paused` flag before every session, so a pause takes effect before the next session starts; a session already in progress runs to its end. Only a literal `paused: true` pauses (not `yes`, `"true"` or `1`). If `bau.yaml` fails to parse mid-run, the run keeps the last value it read. Merged PRs are still closed out and green drafts still marked ready while paused, since neither starts a session. For an immediate stop, see "Stop a run now".
 
 ## Stop a run now
 
