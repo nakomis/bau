@@ -553,3 +553,39 @@ def test_triage_prompt_states_the_field_limit(cfg):
         item(), "r/x", [], round=1, limits=cfg.limits, owner_email=OWNER, worker_email=WORKER
     )
     assert "500 characters" in brief
+
+
+# -- state and open PRs (I2) ----------------------------------------------------
+@pytest.mark.parametrize("state", ["Ready for test", "Done", "Archived", "Cancelled"])
+def test_triage_skips_finished_items(cfg, state):
+    plane = FakePlane({"HOME": [replace(item(), state=state)]})
+    runner = FakeRunner([])
+    triage_pass(make_night(cfg, plane, runner))
+    assert runner.briefs == [] and plane.calls == []
+
+
+def test_triage_skips_items_with_an_open_bau_pr(cfg):
+    from tests.test_runloop import pr
+
+    plane = FakePlane({"HOME": [item()]})
+    runner = FakeRunner([])
+    n = make_night(cfg, plane, runner)
+    n._open = {"nakomis/home-infra": [pr(ref="HOME-1")]}
+    triage_pass(n)
+    assert runner.briefs == [] and plane.calls == []
+
+
+# -- hand-edited labels (I3) ----------------------------------------------------
+def test_questions_label_removed_by_hand_triages_again():
+    # BAU asked, Martin took bau-questions off without answering: the item must not be orphaned.
+    assert needs_triage(item(), [verdict("questions")], WORKER)
+
+
+def test_not_bau_removed_after_too_big_triages_again():
+    # Triage said too big; Martin removed not-bau and put BAU back without editing the description.
+    assert needs_triage(item(), [verdict("too_big")], WORKER)
+
+
+def test_only_a_current_ready_verdict_is_final():
+    assert not needs_triage(item(), [verdict("questions"), verdict("ready", round=2)], WORKER)
+    assert needs_triage(item(), [verdict("ready"), answers()], WORKER)

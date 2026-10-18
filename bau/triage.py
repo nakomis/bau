@@ -62,12 +62,17 @@ def _verdict_and_later_answers(comments: list[Comment], worker_email: str) -> tu
 def needs_triage(item: Item, comments: list[Comment], worker_email: str) -> bool:
     if "BAU" not in item.labels or any(label in NEVER_TRIAGE for label in item.labels):
         return False
-    verdict, answered_since = _verdict_and_later_answers(comments, worker_email)
-    stale = verdict is not None and verdict.desc != desc_hash(item.description)
     if "bau-questions" in item.labels:
         # Waiting for Martin, unless the description changed under the questions: ask afresh.
-        return stale and verdict is not None and verdict.verdict == "questions"
-    return verdict is None or stale or answered_since
+        verdict = latest_verdict(comments, worker_email)
+        return (
+            verdict is not None
+            and verdict.verdict == "questions"
+            and verdict.desc != desc_hash(item.description)
+        )
+    # Only a ready verdict for this description, with nothing answered since, is final. Any other
+    # verdict on an item that is plain BAU means a label was changed by hand: triage it again.
+    return not ready_for_pickup(item, comments, worker_email)
 
 
 def ready_for_pickup(item: Item, comments: list[Comment], worker_email: str) -> bool:
@@ -168,12 +173,16 @@ def _apply(night: Night, item: Item, round: int, result: TriageResult) -> None:
 
 
 def _candidates(night: Night, ident: str) -> list[tuple[Item, str, list[Comment]]]:
-    from bau.runloop import repo_for
+    from bau.runloop import FINISHED_STATES, repo_for
 
     worker = night.cfg.identities.worker_plane_email
+    open_refs = {r for prs in night._open.values() for p in prs if (r := night.ref_of(p))}
     out = []
     for it in night.plane.list_items(ident, "BAU"):
-        if any(label in NEVER_TRIAGE for label in it.labels):  # cheap check before fetching comments
+        # Cheap checks before fetching comments; finished items and live PRs are past triage.
+        if any(label in NEVER_TRIAGE for label in it.labels):
+            continue
+        if it.state.casefold() in FINISHED_STATES or it.ref in open_refs:
             continue
         repo = repo_for(it, night.projects)
         if repo is None or repo not in night.installed:
