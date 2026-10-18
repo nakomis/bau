@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from bau.checkout import Repos
-from bau.github import PR, Thread
+from bau.github import PR, IssueComment, Review, Thread
 from bau.plane import Comment, Item, html_to_text, markdown_to_html
 from bau.session import SessionResult
 
@@ -76,7 +76,10 @@ class FakeGitHub:
         merged: dict[str, list[PR]] | None = None,
         issue_comments: dict[int, list[str]] | None = None,
         summaries: str = "",
+        comment_rows: dict[int, list[IssueComment]] | None = None,
+        reviews: dict[int, list[Review]] | None = None,
     ):
+        self.rows_by_pr, self.reviews_by_pr = comment_rows or {}, reviews or {}
         self.open, self.threads_by_pr, self.ci, self.protected = (
             open_prs or {},
             threads or {},
@@ -112,6 +115,17 @@ class FakeGitHub:
 
     def issue_comments(self, repo, number):
         return list(self.comments_by_pr.get(number, []))
+
+    def issue_comment_rows(self, repo, number):
+        """Seeded rows, then plain-string comments (the worker's own, posted via comment())."""
+        rows = list(self.rows_by_pr.get(number, []))
+        return rows + [
+            IssueComment(1000 + i, "nakomis-bau[bot]", b)
+            for i, b in enumerate(self.comments_by_pr.get(number, []))
+        ]
+
+    def reviews(self, repo, number):
+        return list(self.reviews_by_pr.get(number, []))
 
     def comment(self, repo, number, body):
         self.calls.append(("comment", (repo, number, body)))

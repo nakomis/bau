@@ -5,7 +5,7 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from bau.github import GitHubApp, GitHubClient, Thread, ThreadComment, make_jwt
+from bau.github import GitHubApp, GitHubClient, IssueComment, Review, Thread, ThreadComment, make_jwt
 
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 PEM = KEY.private_bytes(
@@ -133,7 +133,15 @@ ROUTES = {
     "/repos/nakomis/home-infra/commits/abc123/check-runs": (200, CHECK_RUNS),
     "/repos/nakomis/home-infra/issues/7/comments": (
         200,
-        [{"body": "[bau:ci-fix] 1/3"}, {"body": None}, {"body": "hello"}],
+        [
+            {"id": 1, "user": {"login": "nakomis-bau[bot]"}, "body": "[bau:ci-fix] 1/3"},
+            {"id": 2, "user": None, "body": None},
+            {"id": 3, "user": {"login": "nakomis"}, "body": "hello"},
+        ],
+    ),
+    "/repos/nakomis/home-infra/pulls/7/reviews": (
+        200,
+        [{"id": 9, "user": {"login": "nakomis"}, "state": "COMMENTED", "body": None}],
     ),
     "/repos/nakomis/home-infra/branches/main/protection": (200, GUARDED),
     "/repos/nakomis/other/branches/main/protection": (404, {"message": "Branch not protected"}),
@@ -282,3 +290,15 @@ def test_write_methods_send_expected_requests():
 
 def test_issue_comments_returns_bodies():
     assert client().issue_comments("nakomis/home-infra", 7) == ["[bau:ci-fix] 1/3", "", "hello"]
+
+
+def test_issue_comment_rows_carry_ids_and_authors():
+    assert client().issue_comment_rows("nakomis/home-infra", 7) == [
+        IssueComment(1, "nakomis-bau[bot]", "[bau:ci-fix] 1/3"),
+        IssueComment(2, "", ""),
+        IssueComment(3, "nakomis", "hello"),
+    ]
+
+
+def test_reviews_carry_state_and_tolerate_null_body():
+    assert client().reviews("nakomis/home-infra", 7) == [Review(9, "nakomis", "COMMENTED", "")]

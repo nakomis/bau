@@ -83,6 +83,21 @@ class Thread:
     comments: list[ThreadComment] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class IssueComment:
+    id: int
+    author: str
+    body: str
+
+
+@dataclass(frozen=True)
+class Review:
+    id: int
+    author: str
+    state: str
+    body: str
+
+
 THREADS_QUERY = """
 query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){ pullRequest(number:$number){
@@ -203,6 +218,21 @@ class GitHubClient:
         """Bodies of the first 100 issue comments on a PR (the worker's own markers live here)."""
         rows = self._get(f"/repos/{repo}/issues/{number}/comments", per_page=100)
         return [c.get("body") or "" for c in rows]
+
+    def issue_comment_rows(self, repo: str, number: int) -> list[IssueComment]:
+        """The first 100 issue comments on a PR with ids and authors (REST logins, "[bot]" included)."""
+        rows = self._get(f"/repos/{repo}/issues/{number}/comments", per_page=100)
+        return [
+            IssueComment(c["id"], (c.get("user") or {}).get("login", ""), c.get("body") or "") for c in rows
+        ]
+
+    def reviews(self, repo: str, number: int) -> list[Review]:
+        """The first 100 submitted reviews on a PR; the body is the "Finish your review" text."""
+        rows = self._get(f"/repos/{repo}/pulls/{number}/reviews", per_page=100)
+        return [
+            Review(r["id"], (r.get("user") or {}).get("login", ""), r.get("state", ""), r.get("body") or "")
+            for r in rows
+        ]
 
     def branch_protected(self, repo: str, branch: str = "main") -> bool:
         """True if the branch has classic protection (checks or reviews, no force push) or a
