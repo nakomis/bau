@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from bau.cli import ClientFactory, build_parser, exit_code, snapshot_rows
+from bau.config import Nudge
 from bau.github import Token
 from bau.snapshot import OpenPrRow
 
@@ -34,6 +35,7 @@ def test_abnormal_stop_reasons_exit_one(reason):
 
 
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
+NUDGE = Nudge(5, 5, 10, 14, 5, 3, 10, 7)
 
 
 class FakePr:
@@ -78,9 +80,11 @@ def test_snapshot_rows_survives_one_repo_failing():
         "a/bad": FakeGh([], fail=True),
         "a/good": FakeGh([FakePr(1, "feat: x (HOME-3)"), FakePr(2, "no ref")]),
     }
-    cfg = SimpleNamespace(identities=SimpleNamespace(worker_github_login="bot"))
+    cfg = SimpleNamespace(
+        identities=SimpleNamespace(worker_github_login="bot", worker_plane_email="bau@nakomis.com")
+    )
     logs = []
-    open_rows, deploy_rows = snapshot_rows(
+    open_rows, deploy_rows, _ = snapshot_rows(
         cfg, projects, FakePlane(), lambda repo: ghs[repo], lambda: NOW, log=logs.append
     )
     assert [r.ref for r in open_rows] == ["HOME-3"]
@@ -119,7 +123,7 @@ def test_snapshot_ignores_unknown_last_run_keys(tmp_path, monkeypatch):
             }
         )
     )
-    cfg = SimpleNamespace(paused=False, paths=SimpleNamespace(snapshot=snap))
+    cfg = SimpleNamespace(paused=False, paths=SimpleNamespace(snapshot=snap), nudge=NUDGE)
     monkeypatch.setattr(cli, "load_config", lambda p: cfg)
     monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW))
     assert cli.main(["snapshot"]) == 0
@@ -177,6 +181,7 @@ def run_world(tmp_path, monkeypatch):
     cfg = SimpleNamespace(
         paused=False,
         paths=SimpleNamespace(snapshot=tmp_path / "state.json", logs=tmp_path / "logs"),
+        nudge=NUDGE,
         claude=SimpleNamespace(oauth_token=None),
     )
     StubNight.instances, StubNight.outcome = [], None
@@ -184,7 +189,7 @@ def run_world(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW))
     monkeypatch.setattr(cli, "read_secret", lambda ref: "oat")
     monkeypatch.setattr(cli, "SessionRunner", lambda c, **kw: SimpleNamespace(cfg=c, **kw))
-    monkeypatch.setattr(cli, "snapshot_rows", lambda *a, **k: ([], []))
+    monkeypatch.setattr(cli, "snapshot_rows", lambda *a, **k: ([], [], []))
     monkeypatch.setattr(cli, "Night", StubNight)
     return SimpleNamespace(cli=cli, cfg=cfg, config_dir=config_dir, snapshot=tmp_path / "state.json")
 
@@ -300,3 +305,94 @@ def test_run_waits_up_to_an_hour(run_world, monkeypatch):
     run_world.cfg.identities = SimpleNamespace()
     run_world.cli.main(["run", "--config", str(run_world.config_dir)])
     assert seen == [3600]
+
+
+def test_snapshot_rows_builds_question_rows():
+    from bau.config import ProjectConfig
+    from bau.markers import Question, questions_comment
+    from bau.plane import Comment, Item
+
+    def item(ref, labels):
+        return Item(ref, ref.lower(), "p", f"Title {ref}", "", "Todo", labels, None, "2026-10-01T00:00:00Z")
+
+    qs = [Question("q1", "Which one?", "A", "because")]
+    comments = {
+        "HOME-5": [
+            Comment("c1", "someone@else.com", "2026-10-01T00:00:00Z", "chatter"),
+            Comment("c2", "bau@nakomis.com", "2026-10-10T12:00:00Z", questions_comment(2, "Sum", qs)),
+        ],
+        "HOME-6": [Comment("c3", "bau@nakomis.com", "2026-10-10T12:00:00Z", "no marker here")],
+    }
+
+    comments["NOREPO-1"] = comments["HOME-5"]
+
+    class QPlane(FakePlane):
+        def list_items(self, ident, label):
+            if label != "bau-questions":
+                return []
+            if ident == "HOME":
+                return [item("HOME-5", ["bau-questions"]), item("HOME-6", ["bau-questions"])]
+            return [item("NOREPO-1", ["bau-questions"])]
+
+        def comments(self, ref):
+            return comments[ref]
+
+    projects = {
+        "HOME": ProjectConfig("HOME", "a/good", False),
+        "NOREPO": ProjectConfig("NOREPO", None, False),
+    }
+    cfg = SimpleNamespace(
+        identities=SimpleNamespace(worker_github_login="bot", worker_plane_email="bau@nakomis.com")
+    )
+    logs = []
+
+    def factory(repo):
+        assert repo is not None
+        return FakeGh([])
+
+    open_rows, deploy_rows, question_rows = snapshot_rows(
+        cfg, projects, QPlane(), factory, lambda: NOW, log=logs.append
+    )
+    assert open_rows == [] and deploy_rows == []
+    r = question_rows[0]
+    assert (r.ref, r.repo, r.repo_url, r.title, r.age_days, r.round, r.summary) == (
+        "HOME-5",
+        "a/good",
+        "https://github.com/a/good",
+        "Title HOME-5",
+        4,
+        2,
+        "Sum",
+    )
+    assert r.asked_at == "2026-10-10T12:00:00Z" and r.plane_url == "https://plane/HOME-5"
+    assert r.questions == [{"id": "q1", "text": "Which one?", "recommendation": "A", "why": "because"}]
+    norepo = [x for x in question_rows if x.ref == "NOREPO-1"][0]
+    assert norepo.repo == "" and norepo.repo_url == ""
+    assert not [r for r in question_rows if r.ref == "HOME-6"]
+    assert any("HOME-6" in str(m) for m in logs)
+
+
+def test_failed_run_snapshot_keeps_previous_questions_and_nudge(run_world):
+    import json
+
+    from bau.snapshot import read_snapshot
+
+    kept = {"questions": [{"ref": "HOME-5"}], "nudge": {"level": "warn", "prs": "ok", "questions": "warn"}}
+    run_world.snapshot.write_text(json.dumps(kept))
+    StubNight.outcome = RuntimeError("x")
+    assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 1
+    snap = read_snapshot(run_world.snapshot)
+    assert snap["questions"] == [{"ref": "HOME-5"}] and snap["nudge"]["level"] == "warn"
+    assert snap["uninstalled"] == []
+
+
+def test_hourly_snapshot_carries_uninstalled_forward(run_world, monkeypatch):
+    import json
+
+    from bau.snapshot import read_snapshot
+
+    run_world.snapshot.write_text(json.dumps({"uninstalled": ["o/gone"]}))
+    monkeypatch.setattr(run_world.cli, "snapshot_rows", lambda *a, **k: ([], [], []))
+    assert run_world.cli.main(["snapshot", "--config", str(run_world.config_dir)]) == 0
+    snap = read_snapshot(run_world.snapshot)
+    assert snap["uninstalled"] == ["o/gone"] and snap["schema"] == 2

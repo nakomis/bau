@@ -5,7 +5,7 @@ import signal
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import fields
+from dataclasses import asdict, fields
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -22,14 +22,16 @@ from bau.checkout import Repos
 from bau.config import Config, KeychainRef, load_config, load_projects, paused_reader
 from bau.github import GitHubApp, GitHubClient
 from bau.lock import run_lock
+from bau.markers import latest_asked
 from bau.plane import PlaneClient
-from bau.runloop import TOKEN_REFRESH_MARGIN, Night, NightReport
+from bau.runloop import TOKEN_REFRESH_MARGIN, Night, NightReport, repo_for
 from bau.secrets import read_secret
 from bau.session import SessionRunner
 from bau.snapshot import (
     DeployRow,
     LastRun,
     OpenPrRow,
+    QuestionRow,
     build_snapshot,
     drop_open_pr,
     read_snapshot,
@@ -114,8 +116,15 @@ def wire(cfg: Config, config_dir: Path):
 def snapshot_rows(cfg: Config, projects, plane, factory, clock, log: Callable[..., None] = print):
     open_rows: list[OpenPrRow] = []
     deploy_rows: list[DeployRow] = []
+    question_rows: list[QuestionRow] = []
     now = clock()
     for ident, project in projects.items():
+        try:
+            question_rows.extend(_question_rows(cfg, ident, projects, plane, now, log))
+        except Exception as e:
+            log(f"snapshot: skipping questions for {ident}: {e}")
+        if project.repo is None:
+            continue
         try:
             gh = factory(project.repo)
             rows = []
@@ -152,7 +161,33 @@ def snapshot_rows(cfg: Config, projects, plane, factory, clock, log: Callable[..
             continue
         open_rows.extend(rows)
         deploy_rows.extend(deploys)
-    return open_rows, deploy_rows
+    return open_rows, deploy_rows, question_rows
+
+
+def _question_rows(cfg: Config, ident: str, projects, plane, now: datetime, log) -> list[QuestionRow]:
+    rows = []
+    for item in plane.list_items(ident, "bau-questions"):
+        asked = latest_asked(plane.comments(item.ref), cfg.identities.worker_plane_email)
+        if asked is None:
+            log(f"snapshot: {item.ref} is labelled bau-questions but has no parsable questions")
+            continue
+        repo = repo_for(item, projects) or ""
+        at = datetime.fromisoformat(asked.at.replace("Z", "+00:00"))
+        rows.append(
+            QuestionRow(
+                repo,
+                item.ref,
+                item.name,
+                plane.project_url(item.ref),
+                f"https://github.com/{repo}" if repo else "",
+                asked.at,
+                (now - at).days,
+                asked.round,
+                asked.summary,
+                [asdict(q) for q in asked.questions],
+            )
+        )
+    return rows
 
 
 def _last_run(raw: dict | None) -> LastRun | None:
@@ -215,9 +250,16 @@ def _write_run_snapshot(
         report.feedback_handled,
         stop_reason,
         report.telemetry,
+        report.swept,
+        report.labelled_bau,
+        report.labelled_not_bau,
+        report.triaged,
+        report.asked,
     )
     previous = read_snapshot(cfg.paths.snapshot) or {}
-    open_rows, deploy_rows = ([], []) if failed else snapshot_rows(cfg, projects, plane, factory, clock)
+    open_rows, deploy_rows, question_rows = (
+        ([], [], []) if failed else snapshot_rows(cfg, projects, plane, factory, clock)
+    )
     data = build_snapshot(
         paused=paused,
         last_run=last,
@@ -225,12 +267,17 @@ def _write_run_snapshot(
         open_prs=open_rows,
         deploy_pending=deploy_rows,
         declined=report.declined,
+        questions=question_rows,
+        nudge_thresholds=cfg.nudge,
+        uninstalled=report.uninstalled,
         now=time.time(),
         pace_override=previous.get("pace"),
     )
     if failed:  # the services may be what failed: keep the last known rows rather than blanking them
         data["open_prs"] = previous.get("open_prs", [])
         data["deploy_pending"] = previous.get("deploy_pending", [])
+        data["questions"] = previous.get("questions", [])
+        data["nudge"] = previous.get("nudge", data["nudge"])  # computed from the kept rows, not the blanks
     write_snapshot(cfg.paths.snapshot, data)
 
 
@@ -287,7 +334,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 0
     if args.command == "snapshot":
         previous = read_snapshot(cfg.paths.snapshot) or {}
-        open_rows, deploy_rows = snapshot_rows(cfg, projects, plane, factory, clock)
+        open_rows, deploy_rows, question_rows = snapshot_rows(cfg, projects, plane, factory, clock)
         last = _last_run(previous.get("last_run"))
         write_snapshot(
             cfg.paths.snapshot,
@@ -298,6 +345,9 @@ def _dispatch(args: argparse.Namespace) -> int:
                 open_prs=open_rows,
                 deploy_pending=deploy_rows,
                 declined=previous.get("declined", []),
+                questions=question_rows,
+                nudge_thresholds=cfg.nudge,
+                uninstalled=previous.get("uninstalled", []),
                 now=time.time(),
                 pace_override=previous.get("pace"),
             ),
