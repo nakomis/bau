@@ -112,6 +112,13 @@ def answers_comment(round: int, questions: list[Question], answers: list[Answer]
     return "\n\n".join(paras)
 
 
+TRIAGE_FAILED = "[bau:triage-failed]"
+
+
+def triage_failed_comment(reason_said: str) -> str:
+    return f"{TRIAGE_FAILED} Triage reached no verdict; it will try again another night. {reason_said}"
+
+
 def swept_comment(verdict: str, reason_said: str) -> str:
     return f"[bau:swept verdict={verdict}]\n\n{reason_said}"
 

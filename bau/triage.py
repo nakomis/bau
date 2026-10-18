@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from bau.markers import (
+    TRIAGE_FAILED,
     VERDICTS,
     Question,
     Verdict,
@@ -19,6 +20,7 @@ from bau.markers import (
     latest_verdict,
     questions_comment,
     triage_comment,
+    triage_failed_comment,
 )
 from bau.plane import Comment, Item
 from bau.prompts import build_triage_brief
@@ -32,6 +34,7 @@ MAX_QUESTIONS = 5
 MAX_FIELD_CHARS = 500  # stated in TRIAGE_PROMPT; longer text is rejected, never cut short
 QUESTION_FIELDS = ("id", "text", "recommendation", "why")
 SPEAKER = "triage agent"
+TRIAGE_GAVE_UP = "triage failed twice; comment on the ticket to retry"
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,18 @@ def _verdict_and_later_answers(comments: list[Comment], worker_email: str) -> tu
         if answered([c], worker_email):
             answers_at = i
     return found, answers_at > verdict_at
+
+
+def triage_failures(comments: list[Comment], owner_email: str, worker_email: str) -> int:
+    """The worker's triage-failed notes since the last verdict or the owner's last comment, whichever
+    is later: a verdict or a word from Martin starts the count again."""
+    count = 0
+    for c in comments:
+        if c.author_email == owner_email or latest_verdict([c], worker_email):
+            count = 0
+        elif c.author_email == worker_email and c.text.lstrip().startswith(TRIAGE_FAILED):
+            count += 1
+    return count
 
 
 def needs_triage(item: Item, comments: list[Comment], worker_email: str) -> bool:
@@ -188,9 +203,23 @@ def _candidates(night: Night, ident: str) -> list[tuple[Item, str, list[Comment]
         if repo is None or repo not in night.installed:
             continue
         comments = night.plane.comments(it.ref)
-        if needs_triage(it, comments, worker):
-            out.append((it, repo, comments))
+        if not needs_triage(it, comments, worker):
+            continue
+        owner = night.cfg.identities.owner_plane_email
+        if triage_failures(comments, owner, worker) >= night.cfg.limits.max_triage_failures:
+            night.report.declined.append({"ref": it.ref, "reason": TRIAGE_GAVE_UP, "at": night.now_iso()})
+            continue
+        out.append((it, repo, comments))
     return out
+
+
+def _failed(night: Night, ref: str, why: str) -> None:
+    """Note a session that reached no verdict, so repeated failures stop. Best effort."""
+    night.log(f"triage {ref}: {why}")
+    try:
+        night.plane.comment(ref, triage_failed_comment(_clean_reason(why)))
+    except Exception as e:
+        night.log(f"triage {ref}: could not record the failure: {type(e).__name__}: {e}")
 
 
 def triage_pass(night: Night) -> None:
@@ -233,11 +262,11 @@ def triage_pass(night: Night) -> None:
             if result.outcome == "rate_limited":
                 return
             if result.outcome != "done":
-                night.log(f"triage {it.ref}: session ended with {result.outcome}: {result.reason}")
+                _failed(night, it.ref, f"session ended with {result.outcome}: {result.reason}")
                 continue
             parsed = parse_triage(result.result_text)
             if parsed is None:
-                night.log(f"triage {it.ref}: no valid verdict in the output; retrying another night")
+                _failed(night, it.ref, "no valid verdict in the output")
                 continue
             try:
                 _apply(night, it, round, parsed)

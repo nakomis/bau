@@ -7,7 +7,7 @@ from bau.config import Limits, Schedule
 from bau.policy import Decision, Policy, elapsed_fraction, pace_allows
 from bau.telemetry import RateLimit, Window
 
-LIMITS = Limits(0.10, 0.80, 60, 5.0, 2, 3, 15, 400, 15, 1.25, 10, 4, 7, 40)
+LIMITS = Limits(0.10, 0.80, 60, 5.0, 2, 3, 15, 400, 15, 1.25, 10, 4, 7, 40, 2)
 SCHEDULE = Schedule(time(5, 0), "Europe/London")
 LONDON = ZoneInfo("Europe/London")
 WEEK = 7 * 86400

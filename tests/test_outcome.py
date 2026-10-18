@@ -1,7 +1,7 @@
 from bau.config import Limits
 from bau.outcome import diff_too_big, too_big_reason
 
-LIMITS = Limits(0.10, 0.80, 60, 5.0, 2, 3, 15, 400, 15, 1.25, 10, 4, 7, 40)
+LIMITS = Limits(0.10, 0.80, 60, 5.0, 2, 3, 15, 400, 15, 1.25, 10, 4, 7, 40, 2)
 
 
 def test_too_big_reason_matches_only_a_whole_line():

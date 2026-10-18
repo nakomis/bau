@@ -14,7 +14,8 @@ limits: {pace_margin: 0.10, five_hour_kill: 0.80,
          too_big_files: 15, too_big_lines: 400,
          sweep_session_wall_clock_minutes: 15, triage_budget_usd: 1.25,
          triage_wall_clock_minutes: 10, max_question_rounds: 4,
-         sweep_owner_quiet_days: 7, sweep_batch_items: 40}
+         sweep_owner_quiet_days: 7, sweep_batch_items: 40,
+         max_triage_failures: 2}
 nudge: {prs_warn_count: 5, prs_warn_days: 5, prs_down_count: 10, prs_down_days: 14,
         questions_warn_count: 5, questions_warn_days: 3, questions_down_count: 10,
         questions_down_days: 7}
@@ -40,7 +41,7 @@ def test_loads_every_section(tmp_path: Path):
     assert cfg.paused is False
     assert cfg.schedule.no_new_sessions_after == time(5, 0)
     assert cfg.limits.sweep_session_wall_clock_minutes == 15
-    assert cfg.limits == Limits(0.10, 0.80, 60, 5.0, 2, 3, 15, 400, 15, 1.25, 10, 4, 7, 40)
+    assert cfg.limits == Limits(0.10, 0.80, 60, 5.0, 2, 3, 15, 400, 15, 1.25, 10, 4, 7, 40, 2)
     assert cfg.models.fable_label == "BAU-fable"
     assert cfg.github_app.private_key.account == "github-app-key"
     assert cfg.plane.client_cert == Path("~/.config/bau/cere.crt.pem").expanduser()

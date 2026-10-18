@@ -21,6 +21,7 @@ limits:
   max_question_rounds: 4
   sweep_owner_quiet_days: 7
   sweep_batch_items: 40
+  max_triage_failures: 2
 
 # Dashboard nudges (BD-1): warn at the count or the age, down at the higher pair.
 nudge:

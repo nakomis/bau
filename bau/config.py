@@ -30,6 +30,7 @@ class Limits:
     max_question_rounds: int
     sweep_owner_quiet_days: int
     sweep_batch_items: int
+    max_triage_failures: int
 
 
 @dataclass(frozen=True)
