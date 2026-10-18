@@ -11,7 +11,7 @@ from bau.config import ProjectConfig
 from bau.github import GitHubClient
 from bau.lock import run_lock
 from bau.plane import Comment, PlaneClient, split_ref
-from bau.runloop import Night, previous_state
+from bau.runloop import Night, previous_state, repo_for
 
 log = logging.getLogger(__name__)
 REF_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*-[1-9][0-9]*$")
@@ -99,18 +99,19 @@ def _abandon(ref, plane, github_factory, repos, projects, worker_login, worker_e
     restored = previous_state(comments, worker_email) or "New"
     suffix = f" Note: {note}" if note else ""
 
-    ident, _ = split_ref(ref)
-    project = projects[ident]
-    gh = github_factory(project.repo)
+    repo = repo_for(item, projects)
+    if repo is None:
+        raise UnknownProject(f"no repository for {ref}")
+    gh = github_factory(repo)
     # Restore the state first: if anything later fails, the item is no longer eligible for pick-up
     # and the PR and label are still there for a retry.
     plane.set_state(ref, restored)
     pr_number = None
     branch = None
-    for pr in gh.open_prs(project.repo, worker_login):
+    for pr in gh.open_prs(repo, worker_login):
         if Night.ref_of(pr) == ref and pr.head_ref.startswith(ref.lower() + "-"):
-            gh.comment(project.repo, pr.number, "[bau] Abandoned by Martin from the BAU dashboard." + suffix)
-            gh.close_pr(project.repo, pr.number)
+            gh.comment(repo, pr.number, "[bau] Abandoned by Martin from the BAU dashboard." + suffix)
+            gh.close_pr(repo, pr.number)
             pr_number, branch = pr.number, pr.head_ref
             break
     if branch is None:
@@ -123,6 +124,8 @@ def _abandon(ref, plane, github_factory, repos, projects, worker_login, worker_e
             repos.delete_checkout(branch)
         except ValueError:
             log.warning("refused to delete a checkout for %s", ref)
+    # not-bau before BAU comes off: a failure between the two must not leave the item unlabelled.
+    plane.add_labels(ref, ["not-bau"])
     plane.remove_labels(ref, ["BAU"])
-    plane.comment(ref, f"[bau:abandoned] by Martin. Returned to {restored}; BAU label removed." + suffix)
+    plane.comment(ref, f"[bau:abandoned] by Martin. Returned to {restored}; marked not-bau." + suffix)
     return AbandonResult(ref, pr_number, restored)

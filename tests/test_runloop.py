@@ -1,3 +1,4 @@
+import json
 import subprocess
 from dataclasses import replace
 from datetime import datetime
@@ -6,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from bau.config import Models, ProjectConfig
 from bau.github import PR, Thread, ThreadComment, Token
+from bau.markers import desc_hash, triage_comment
 from bau.plane import Comment, Item
 from bau.runloop import Night, branch_name, model_for, previous_state, repo_for
 from bau.session import SessionResult
@@ -15,6 +17,17 @@ from tests.fakes.clients import FakeGitHub, FakePlane, FakeRepos, FakeRunner
 LONDON = ZoneInfo("Europe/London")
 REPO = "nakomis/home-infra"
 PROJECTS = {"HOME": ProjectConfig("HOME", REPO, True, "Run the playbook")}
+
+
+class TriagedPlane(FakePlane):
+    """Every BAU item starts with a fresh ready verdict, so the night picks it up without triage."""
+
+    def __init__(self, items, comments=None):
+        comments = dict(comments or {})
+        for it in (i for group in items.values() for i in group if "BAU" in i.labels):
+            verdict = triage_comment("ready", 1, desc_hash(it.description), "ok")
+            comments[it.ref] = [Comment("v", "bau@nakomis.com", "", verdict), *comments.get(it.ref, [])]
+        super().__init__(items, comments)
 
 
 def item(ref="HOME-42", name="Rotate logs", labels=("BAU",), desc="do it", state="New"):
@@ -68,11 +81,12 @@ def night(
     app=None,
     paused=None,
     logs=None,
+    projects=None,
 ):
     clock = lambda: datetime(2026, 10, 15, hour, minute, tzinfo=LONDON)  # noqa: E731
     n = Night(
         cfg,
-        PROJECTS,
+        projects or PROJECTS,
         plane,
         app or StubApp(),
         lambda repo: gh,
@@ -114,7 +128,7 @@ def test_ref_of_prefers_body_then_title():
 
 
 def test_new_ticket_happy_path_opens_pr_and_marks_ready(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]})
+    plane = TriagedPlane({"HOME": [item()]})
     gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "green"})
     runner = FakeRunner(
         [SessionResult("done", "", good_rl(), 0.5, "Opened https://x/pull/7")], on_run=opens_pr(gh, pr())
@@ -132,7 +146,7 @@ def test_new_ticket_happy_path_opens_pr_and_marks_ready(cfg, tmp_path):
 
 
 def test_red_ci_gets_one_fix_session_with_summaries_then_ready(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]})
+    plane = TriagedPlane({"HOME": [item()]})
     gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "red"}, summaries="tests: 3 failed\ntest_x broke")
     runs = []
 
@@ -155,7 +169,7 @@ def test_red_ci_gets_one_fix_session_with_summaries_then_ready(cfg, tmp_path):
 
 
 def test_red_ci_that_stays_red_leaves_draft_with_comment(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]})
+    plane = TriagedPlane({"HOME": [item()]})
     gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "red"})
     runner = FakeRunner(
         [SessionResult("done", "", good_rl(), 0.5, "pr"), SessionResult("done", "", good_rl(), 0.2, "x")],
@@ -166,21 +180,8 @@ def test_red_ci_that_stays_red_leaves_draft_with_comment(cfg, tmp_path):
     assert any(c[0] == "comment" and "draft" in c[1][1] and "red" in c[1][1] for c in plane.calls)
 
 
-def test_too_big_restores_state_and_keeps_label(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(state="Ready")]})
-    gh = FakeGitHub(open_prs={REPO: []})
-    runner = FakeRunner(
-        [SessionResult("too_big", "schema change", good_rl(), 0.1, "BAU_TOO_BIG: schema change")]
-    )
-    repos = FakeRepos(tmp_path)
-    night(cfg, plane, gh, runner, repos).run()
-    assert ("set_state", ("HOME-42", "Ready")) in plane.calls
-    assert not any(c[0] == "remove_labels" for c in plane.calls)
-    assert ("delete_checkout", "home-42-rotate-logs") in repos.calls
-
-
 def test_previous_state_survives_a_repeat_pickup(cfg, tmp_path):
-    plane = FakePlane(
+    plane = TriagedPlane(
         {"HOME": [item(state="In progress")]},
         comments={"HOME-42": [Comment("c", "bau@nakomis.com", "", "[bau:picked-up from=Ready] x")]},
     )
@@ -191,7 +192,7 @@ def test_previous_state_survives_a_repeat_pickup(cfg, tmp_path):
 
 
 def test_diff_over_threshold_is_closed_as_too_big_even_if_agent_opened_a_pr(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]})
+    plane = TriagedPlane({"HOME": [item()]})
     gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "green"})
     runner = FakeRunner(
         [SessionResult("done", "", good_rl(), 0.5, "Opened https://x/pull/7")],
@@ -208,7 +209,7 @@ def test_diff_over_threshold_is_closed_as_too_big_even_if_agent_opened_a_pr(cfg,
 
 def test_feedback_first_runs_before_new_tickets_and_acks(cfg, tmp_path):
     existing = pr(number=7, ref="HOME-40")
-    plane = FakePlane(
+    plane = TriagedPlane(
         {"HOME": [item(ref="HOME-40", state="In progress"), item(ref="HOME-42")]},
         comments={"HOME-40": [Comment("c1", "martin@nakomis.com", "t", "change approach")]},
     )
@@ -229,7 +230,7 @@ def test_feedback_first_runs_before_new_tickets_and_acks(cfg, tmp_path):
 
 def red_pr_world(existing_comments):
     existing = pr(number=7, ref="HOME-40")
-    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    plane = TriagedPlane({"HOME": [item(ref="HOME-40", state="In progress")]})
     gh = FakeGitHub(open_prs={REPO: [existing]}, ci={"abc": "red"}, issue_comments={7: existing_comments})
     return plane, gh
 
@@ -255,8 +256,8 @@ def test_ci_fix_limit_reached_leaves_draft_and_comments_once(cfg, tmp_path):
     assert not any(c[0] == "mark_ready" for c in gh.calls)
 
 
-def test_declines_unprotected_empty_and_unmapped_without_crashing(cfg, tmp_path):
-    plane = FakePlane(
+def test_declines_unprotected_and_empty_and_skips_unmapped_silently(cfg, tmp_path):
+    plane = TriagedPlane(
         {
             "HOME": [
                 item(desc="repo: nakomis/nowhere"),
@@ -269,15 +270,15 @@ def test_declines_unprotected_empty_and_unmapped_without_crashing(cfg, tmp_path)
     runner = FakeRunner([])
     report = night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
     assert report.sessions == 0
-    assert {d["ref"] for d in report.declined} == {"HOME-42", "HOME-43", "ZZZ-1"}
+    assert {d["ref"] for d in report.declined} == {"HOME-42", "HOME-43"}
     reasons = {c[1][0]: c[1][1] for c in plane.calls if c[0] == "comment"}
-    assert set(reasons) == {"HOME-42", "HOME-43", "ZZZ-1"}
+    assert set(reasons) == {"HOME-42", "HOME-43"}
     assert all(v.startswith("[bau] Not picked up:") for v in reasons.values())
     assert all(c[0] != "set_state" for c in plane.calls)
 
 
 def test_decline_comment_is_not_repeated_on_later_nights(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(desc="")]})
+    plane = TriagedPlane({"HOME": [item(desc="")]})
     night(cfg, plane, FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path)).run()
     text = next(c[1][1] for c in plane.calls if c[0] == "comment")
     plane.comments_by_ref["HOME-42"] = [Comment("c", "bau@nakomis.com", "", text)]
@@ -289,13 +290,13 @@ def test_decline_comment_is_not_repeated_on_later_nights(cfg, tmp_path):
 def test_pace_fails_at_preflight(cfg, tmp_path):
     now = datetime(2026, 10, 15, 2, tzinfo=LONDON).timestamp()
     bad = RateLimit("allowed", Window(0.1, int(now + 3600)), Window(0.9, int(now + 300000)))
-    plane = FakePlane({"HOME": [item()]})
+    plane = TriagedPlane({"HOME": [item()]})
     report = night(cfg, plane, FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path), probe=bad).run()
     assert report.stop_reason == "pace" and report.sessions == 0
 
 
 def test_rejected_ends_the_night_at_once(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(), item(ref="HOME-43", name="Other")]})
+    plane = TriagedPlane({"HOME": [item(), item(ref="HOME-43", name="Other")]})
     gh = FakeGitHub(open_prs={REPO: []})
     runner = FakeRunner([SessionResult("rate_limited", "hit your limit", None, 0.1, "hit your limit")])
     report = night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
@@ -303,7 +304,7 @@ def test_rejected_ends_the_night_at_once(cfg, tmp_path):
 
 
 def test_dry_run_writes_nothing(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]})
+    plane = TriagedPlane({"HOME": [item()]})
     gh = FakeGitHub(open_prs={REPO: []})
     report = night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path), dry_run=True).run()
     assert report.sessions == 0 and plane.calls == [] and gh.calls == []
@@ -325,7 +326,7 @@ def test_merged_prs_close_the_loop(cfg, tmp_path):
         "Plane: HOME-40",
         "clean",
     )
-    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    plane = TriagedPlane({"HOME": [item(ref="HOME-40", state="In progress")]})
     gh = FakeGitHub(open_prs={}, merged={REPO: [merged]})
     night_repos = FakeRepos(tmp_path)
     night(cfg, plane, gh, FakeRunner([]), night_repos).run()
@@ -349,7 +350,7 @@ def test_merged_pr_in_non_deploying_project_is_done_and_not_handled_twice(cfg, t
         "clean",
     )
     projects = {"BAU": ProjectConfig("BAU", "nakomis/bau", False)}
-    plane = FakePlane({"BAU": [item(ref="BAU-4", state="In progress")]})
+    plane = TriagedPlane({"BAU": [item(ref="BAU-4", state="In progress")]})
     gh = FakeGitHub(open_prs={}, merged={"nakomis/bau": [merged]})
     n = night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path))
     n.projects = projects
@@ -364,7 +365,7 @@ def test_merged_pr_in_non_deploying_project_is_done_and_not_handled_twice(cfg, t
 
 
 def test_done_items_with_the_label_are_not_picked_up_again(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(state="Done")]})
+    plane = TriagedPlane({"HOME": [item(state="Done")]})
     report = night(cfg, plane, FakeGitHub(open_prs={REPO: []}), FakeRunner([]), FakeRepos(tmp_path)).run()
     assert report.sessions == 0 and plane.calls == []
 
@@ -372,7 +373,7 @@ def test_done_items_with_the_label_are_not_picked_up_again(cfg, tmp_path):
 def test_wait_for_ci_polls_until_settled(cfg, tmp_path):
     sleeps = []
     gh = FakeGitHub(ci={"abc": ["pending", "none", "green"]})
-    n = night(cfg, FakePlane({}), gh, FakeRunner([]), FakeRepos(tmp_path))
+    n = night(cfg, TriagedPlane({}), gh, FakeRunner([]), FakeRepos(tmp_path))
     n.sleep = sleeps.append
     assert n.wait_for_ci(gh, REPO, "abc", poll_s=30) == "green"
     assert sleeps == [30, 30]
@@ -381,7 +382,7 @@ def test_wait_for_ci_polls_until_settled(cfg, tmp_path):
 def test_wait_for_ci_times_out_with_last_status(cfg, tmp_path):
     sleeps = []
     gh = FakeGitHub(ci={"abc": "pending"})
-    n = night(cfg, FakePlane({}), gh, FakeRunner([]), FakeRepos(tmp_path))
+    n = night(cfg, TriagedPlane({}), gh, FakeRunner([]), FakeRepos(tmp_path))
     n.sleep = sleeps.append
     assert n.wait_for_ci(gh, REPO, "abc", timeout_s=90, poll_s=30) == "pending"
     assert sleeps == [30, 30, 30]
@@ -389,7 +390,7 @@ def test_wait_for_ci_times_out_with_last_status(cfg, tmp_path):
 
 def test_tokens_are_reminted_when_close_to_expiry(cfg, tmp_path):
     app = StubApp()
-    n = night(cfg, FakePlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path), app=app)
+    n = night(cfg, TriagedPlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path), app=app)
     assert n.token(REPO) == "ghs1" and n.token(REPO) == "ghs1"
     n.clock = lambda: datetime(2026, 10, 15, 3, 55, tzinfo=LONDON)  # 02:55 UTC, token expires 03:00
     assert n.token(REPO) == "ghs2"
@@ -403,14 +404,14 @@ def test_probe_uses_subscription_login_and_never_bare(cfg, tmp_path, monkeypatch
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr("bau.probe.subprocess.run", fake_run)
-    n = night(cfg, FakePlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path))
+    n = night(cfg, TriagedPlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path))
     assert Night.probe(n) is None
     assert "--disable-slash-commands" in seen["cmd"] and "--bare" not in seen["cmd"]
     assert seen["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "oat"
 
 
 def test_a_crashing_ticket_does_not_abort_the_night(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(), item(ref="HOME-43", name="Other")]})
+    plane = TriagedPlane({"HOME": [item(), item(ref="HOME-43", name="Other")]})
     gh = FakeGitHub(open_prs={REPO: []})
     runner = FakeRunner([RuntimeError("docker exploded"), SessionResult("done", "", good_rl(), 0.1, "x")])
     report = night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
@@ -422,7 +423,7 @@ def test_a_crashing_ticket_does_not_abort_the_night(cfg, tmp_path):
 
 
 def test_a_crashing_pr_in_the_feedback_pass_is_recorded_and_skipped(cfg, tmp_path):
-    plane = FakePlane(
+    plane = TriagedPlane(
         {"HOME": [item(ref="HOME-40", state="In progress"), item(ref="HOME-41", state="In progress")]}
     )
     gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-40"), pr(8, "HOME-41")]}, ci={"abc": "red"})
@@ -450,7 +451,7 @@ def test_a_crashing_merged_pr_is_recorded_and_skipped(cfg, tmp_path):
             "clean",
         )
 
-    plane = FakePlane(
+    plane = TriagedPlane(
         {"HOME": [item(ref="HOME-40", state="In progress"), item(ref="HOME-41", state="In progress")]}
     )
     gh = FakeGitHub(open_prs={}, merged={REPO: [merged_pr(5, "HOME-40"), merged_pr(6, "HOME-41")]})
@@ -469,7 +470,7 @@ def test_a_crashing_merged_pr_is_recorded_and_skipped(cfg, tmp_path):
 
 
 def test_leftover_checkout_from_a_failed_night_is_replaced(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]})
+    plane = TriagedPlane({"HOME": [item()]})
     repos = FakeRepos(tmp_path, existing=("home-42-rotate-logs",))
     runner = FakeRunner([SessionResult("failed", "no result line", good_rl(), 0.1, "")])
     report = night(cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, repos).run()
@@ -479,7 +480,7 @@ def test_leftover_checkout_from_a_failed_night_is_replaced(cfg, tmp_path):
 
 
 def test_feedback_recreates_a_missing_checkout_from_the_remote_branch(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    plane = TriagedPlane({"HOME": [item(ref="HOME-40", state="In progress")]})
     gh = FakeGitHub(
         open_prs={REPO: [pr(7, "HOME-40")]},
         threads={7: [Thread("T1", False, [ThreadComment("nakomis", "rename", "t")])]},
@@ -491,7 +492,7 @@ def test_feedback_recreates_a_missing_checkout_from_the_remote_branch(cfg, tmp_p
 
 
 def test_fix_session_rate_limited_ends_night_without_marker_or_wait(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(), item(ref="HOME-43", name="Other")]})
+    plane = TriagedPlane({"HOME": [item(), item(ref="HOME-43", name="Other")]})
     gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "red"})
     sleeps = []
     runner = FakeRunner(
@@ -511,7 +512,7 @@ def test_fix_session_rate_limited_ends_night_without_marker_or_wait(cfg, tmp_pat
 
 
 def test_failed_fix_session_still_counts_and_leaves_draft(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]})
+    plane = TriagedPlane({"HOME": [item()]})
     gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "red"})
     runner = FakeRunner(
         [
@@ -526,7 +527,7 @@ def test_failed_fix_session_still_counts_and_leaves_draft(cfg, tmp_path):
 
 
 def test_too_big_fix_restores_the_true_previous_state(cfg, tmp_path):
-    plane = FakePlane(
+    plane = TriagedPlane(
         {"HOME": [item(state="In progress")]},
         comments={"HOME-42": [Comment("c", "bau@nakomis.com", "", "[bau:picked-up from=Ready] x")]},
     )
@@ -547,7 +548,7 @@ def test_too_big_fix_restores_the_true_previous_state(cfg, tmp_path):
 
 
 def test_draft_pr_with_green_ci_and_no_feedback_is_marked_ready_without_a_session(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    plane = TriagedPlane({"HOME": [item(ref="HOME-40", state="In progress")]})
     gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-40", draft=True)]}, ci={"abc": "green"})
     runner = FakeRunner([])
     night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
@@ -557,14 +558,14 @@ def test_draft_pr_with_green_ci_and_no_feedback_is_marked_ready_without_a_sessio
 
 
 def test_non_draft_pr_with_green_ci_is_left_alone(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    plane = TriagedPlane({"HOME": [item(ref="HOME-40", state="In progress")]})
     gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-40", draft=False)]}, ci={"abc": "green"})
     night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path)).run()
     assert not any(c[0] == "mark_ready" for c in gh.calls)
 
 
 def test_feedback_session_then_green_ci_marks_ready(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    plane = TriagedPlane({"HOME": [item(ref="HOME-40", state="In progress")]})
     gh = FakeGitHub(
         open_prs={REPO: [pr(7, "HOME-40", draft=True)]},
         threads={7: [Thread("T1", False, [ThreadComment("nakomis", "rename", "t")])]},
@@ -577,7 +578,7 @@ def test_feedback_session_then_green_ci_marks_ready(cfg, tmp_path):
 
 
 def test_repo_override_outside_projects_is_declined_before_any_github_call(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(desc="repo: nakomis/x\ndo it")]})
+    plane = TriagedPlane({"HOME": [item(desc="repo: nakomis/x\ndo it")]})
     gh = FakeGitHub(open_prs={REPO: []})
     report = night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path)).run()
     assert report.declined[0]["reason"] == "repo override nakomis/x is not in projects.yaml"
@@ -604,7 +605,7 @@ def test_merge_comment_carries_short_commit(cfg, tmp_path):
         "clean",
         merge_commit_sha="deadbeefcafe",
     )
-    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    plane = TriagedPlane({"HOME": [item(ref="HOME-40", state="In progress")]})
     night(
         cfg, plane, FakeGitHub(open_prs={}, merged={REPO: [merged]}), FakeRunner([]), FakeRepos(tmp_path)
     ).run()
@@ -616,7 +617,7 @@ def test_merge_comment_carries_short_commit(cfg, tmp_path):
 
 def test_green_draft_over_the_size_limit_is_closed_not_marked_ready(cfg, tmp_path):
     big = replace(pr(7, "HOME-40", draft=True), changed_files=20)
-    plane = FakePlane(
+    plane = TriagedPlane(
         {"HOME": [item(ref="HOME-40", state="In progress")]},
         comments={"HOME-40": [Comment("c", "bau@nakomis.com", "", "[bau:picked-up from=Ready] x")]},
     )
@@ -629,11 +630,10 @@ def test_green_draft_over_the_size_limit_is_closed_not_marked_ready(cfg, tmp_pat
     assert ("close_pr", (REPO, 7)) in gh.calls
     assert ("set_state", ("HOME-40", "Ready")) in plane.calls
     assert ("delete_checkout", "home-40-rotate-logs") in repos.calls
-    assert not any(c[0] == "remove_labels" for c in plane.calls)
 
 
 def test_error_comment_is_not_repeated_and_failed_ticket_returns_to_its_state(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(state="New")]})
+    plane = TriagedPlane({"HOME": [item(state="New")]})
     repos = FakeRepos(tmp_path)
     for _ in range(2):
         gh = FakeGitHub(open_prs={REPO: []})
@@ -646,7 +646,7 @@ def test_error_comment_is_not_repeated_and_failed_ticket_returns_to_its_state(cf
 
 
 def test_feedback_pass_quietly_skips_a_pr_whose_ref_does_not_resolve(cfg, tmp_path):
-    plane = FakePlane({"HOME": []})
+    plane = TriagedPlane({"HOME": []})
     gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-99")]}, ci={"abc": "red"})
     report = night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path)).run()
     assert plane.calls == [] and report.declined == []
@@ -658,7 +658,7 @@ FEEDBACK_THREAD = {7: [Thread("T1", False, [ThreadComment("nakomis", "rename", "
 
 
 def test_feedback_session_always_gets_a_fresh_clone_and_rebases_inside_the_container(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    plane = TriagedPlane({"HOME": [item(ref="HOME-40", state="In progress")]})
     gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-40")]}, threads=FEEDBACK_THREAD, ci={"abc": "green"})
     repos = FakeRepos(tmp_path, existing=("home-40-rotate-logs",))
     runner = FakeRunner([SessionResult("done", "", good_rl(), 0.1, "x")])
@@ -675,7 +675,7 @@ def test_feedback_session_always_gets_a_fresh_clone_and_rebases_inside_the_conta
 
 
 def test_conflicting_pr_brief_says_so(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    plane = TriagedPlane({"HOME": [item(ref="HOME-40", state="In progress")]})
     gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-40", mergeable="dirty")]}, ci={"abc": "green"})
     runner = FakeRunner([SessionResult("done", "", good_rl(), 0.1, "x")])
     night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
@@ -693,10 +693,14 @@ def one_night(cfg, plane, tmp_path, *results):
     return report, runner
 
 
-def test_too_big_then_one_retry_then_skipped(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(state="Ready")]})
+def test_too_big_is_not_retried_until_martin_relabels_then_once_more(cfg, tmp_path):
+    plane = TriagedPlane({"HOME": [item(state="Ready")]})
     report, runner = one_night(cfg, plane, tmp_path, TOO_BIG)
     assert report.sessions == 1 and "PREVIOUS ATTEMPT" not in runner.briefs[0][2]
+    report, runner = one_night(cfg, plane, tmp_path)
+    assert report.sessions == 0 and runner.briefs == []
+    plane.remove_labels("HOME-42", ["not-bau"])  # Martin puts it back in BAU's queue
+    plane.add_labels("HOME-42", ["BAU"])
     report, runner = one_night(cfg, plane, tmp_path, FAILED)
     assert report.sessions == 1
     brief = runner.briefs[0][2]
@@ -711,7 +715,7 @@ def test_too_big_then_one_retry_then_skipped(cfg, tmp_path):
 
 
 def test_failed_then_one_retry_then_skipped(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(state="Ready")]})
+    plane = TriagedPlane({"HOME": [item(state="Ready")]})
     one_night(cfg, plane, tmp_path, FAILED)
     report, runner = one_night(cfg, plane, tmp_path, FAILED)
     assert report.sessions == 1 and "Session ended with failed: exit 1" in runner.briefs[0][2]
@@ -720,7 +724,7 @@ def test_failed_then_one_retry_then_skipped(cfg, tmp_path):
 
 
 def test_owner_comment_after_two_failures_allows_another_attempt(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(state="Ready")]})
+    plane = TriagedPlane({"HOME": [item(state="Ready")]})
     one_night(cfg, plane, tmp_path, FAILED)
     one_night(cfg, plane, tmp_path, FAILED)
     plane.comments_by_ref["HOME-42"].append(Comment("o1", "martin@nakomis.com", "", "please try again"))
@@ -748,7 +752,7 @@ def merged_pr(number=5, ref="HOME-40", head=None):
 def test_a_night_stopped_by_pace_still_closes_merges_and_marks_green_drafts_ready(cfg, tmp_path):
     now = datetime(2026, 10, 15, 2, tzinfo=LONDON).timestamp()
     bad = RateLimit("allowed", Window(0.1, int(now + 3600)), Window(0.9, int(now + 300000)))
-    plane = FakePlane(
+    plane = TriagedPlane(
         {"HOME": [item(ref="HOME-40", state="In progress"), item(ref="HOME-41", state="In progress")]}
     )
     gh = FakeGitHub(
@@ -762,12 +766,12 @@ def test_a_night_stopped_by_pace_still_closes_merges_and_marks_green_drafts_read
 
 def test_merged_prs_are_looked_for_over_thirty_days(cfg, tmp_path):
     gh = FakeGitHub(open_prs={REPO: []})
-    night(cfg, FakePlane({"HOME": []}), gh, FakeRunner([]), FakeRepos(tmp_path)).run()
+    night(cfg, TriagedPlane({"HOME": []}), gh, FakeRunner([]), FakeRepos(tmp_path)).run()
     assert gh.merged_since == ["2026-09-15T00:00:00Z"]
 
 
 def test_an_item_with_a_merged_pr_is_never_picked_up_again(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    plane = TriagedPlane({"HOME": [item(ref="HOME-40", state="In progress")]})
     gh = FakeGitHub(open_prs={REPO: []}, merged={REPO: [merged_pr()]})
     runner = FakeRunner([])
     n = night(cfg, plane, gh, runner, FakeRepos(tmp_path))
@@ -783,7 +787,7 @@ def test_an_item_with_a_merged_pr_is_never_picked_up_again(cfg, tmp_path):
 
 def test_pr_whose_branch_does_not_match_its_ref_is_never_acted_on(cfg, tmp_path):
     forged = replace(pr(7, "HOME-40", draft=True), head_ref="evil-branch")
-    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    plane = TriagedPlane({"HOME": [item(ref="HOME-40", state="In progress")]})
     gh = FakeGitHub(
         open_prs={REPO: [forged]},
         threads=FEEDBACK_THREAD,
@@ -799,14 +803,14 @@ def test_pr_whose_branch_does_not_match_its_ref_is_never_acted_on(cfg, tmp_path)
 
 
 def test_a_session_without_telemetry_drops_the_stale_reading(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]})
+    plane = TriagedPlane({"HOME": [item()]})
     runner = FakeRunner([SessionResult("failed", "exit 1", None, 0.1, "")])
     report = night(cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, FakeRepos(tmp_path)).run()
     assert report.latest is None and report.telemetry == "missing"
 
 
 def test_preflight_failure_on_plane_stops_the_night(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]})
+    plane = TriagedPlane({"HOME": [item()]})
     plane.unreachable = RuntimeError("Plane GET /projects/ -> 502")
     runner = FakeRunner([])
     report = night(cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, FakeRepos(tmp_path)).run()
@@ -819,14 +823,19 @@ def test_preflight_failure_on_github_stops_the_night(cfg, tmp_path):
             raise ConnectionError("no route")
 
     report = night(
-        cfg, FakePlane({"HOME": [item()]}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path), app=DownApp()
+        cfg,
+        TriagedPlane({"HOME": [item()]}),
+        FakeGitHub(),
+        FakeRunner([]),
+        FakeRepos(tmp_path),
+        app=DownApp(),
     ).run()
     assert report.stop_reason == "preflight: ConnectionError" and report.sessions == 0
 
 
 def test_pause_is_rechecked_before_every_session(cfg, tmp_path):
     flag = [False]
-    plane = FakePlane({"HOME": [item(), item(ref="HOME-43", name="Other")]})
+    plane = TriagedPlane({"HOME": [item(), item(ref="HOME-43", name="Other")]})
     runner = FakeRunner([FAILED, FAILED], on_run=lambda: flag.__setitem__(0, True))
     report = night(
         cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, FakeRepos(tmp_path), paused=lambda: flag[0]
@@ -837,14 +846,14 @@ def test_pause_is_rechecked_before_every_session(cfg, tmp_path):
 def test_wait_for_ci_gives_no_checks_a_grace_then_returns_none(cfg, tmp_path):
     sleeps = []
     gh = FakeGitHub(ci={"abc": "none"})
-    n = night(cfg, FakePlane({}), gh, FakeRunner([]), FakeRepos(tmp_path))
+    n = night(cfg, TriagedPlane({}), gh, FakeRunner([]), FakeRepos(tmp_path))
     n.sleep = sleeps.append
     assert n.wait_for_ci(gh, REPO, "abc", poll_s=30) == "none"
     assert sum(sleeps) == 180
 
 
 def test_pr_with_no_ci_is_marked_ready_with_a_comment(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]})
+    plane = TriagedPlane({"HOME": [item()]})
     gh = FakeGitHub(open_prs={REPO: []})
     runner = FakeRunner([SessionResult("done", "", good_rl(), 0.5, "pr")], on_run=opens_pr(gh, pr()))
     night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
@@ -856,7 +865,7 @@ def test_pr_with_no_ci_is_marked_ready_with_a_comment(cfg, tmp_path):
 
 
 def test_draft_with_no_ci_from_an_earlier_night_is_marked_ready(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item(ref="HOME-40", state="In progress")]})
+    plane = TriagedPlane({"HOME": [item(ref="HOME-40", state="In progress")]})
     gh = FakeGitHub(open_prs={REPO: [pr(7, "HOME-40", draft=True)]})
     night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path)).run()
     assert ("mark_ready", ("PR_7",)) in gh.calls
@@ -879,7 +888,7 @@ def test_probe_finds_claude_in_local_bin_and_keeps_the_environment(cfg, tmp_path
     write_fake_claude(home / ".local" / "bin")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
-    n = night(cfg, FakePlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path))
+    n = night(cfg, TriagedPlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path))
     rl = Night.probe(n)
     assert rl is not None and rl.seven_day == Window(0.3, 2)
 
@@ -888,7 +897,7 @@ def test_probe_reports_a_missing_claude_loudly(cfg, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "nohome"))
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     logs: list = []
-    n = night(cfg, FakePlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path), logs=logs)
+    n = night(cfg, TriagedPlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path), logs=logs)
     assert Night.probe(n) is None
     assert any("claude" in str(m) and "not found" in str(m) for m in logs)
     n.probe = lambda: Night.probe(n)
@@ -904,8 +913,149 @@ def test_previous_state_ignores_non_worker_comments():
 
 
 def test_already_picked_up_recognises_a_round_tripped_comment(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]})
+    plane = TriagedPlane({"HOME": [item()]})
     plane.comment("HOME-42", "[bau:picked-up from=Ready] Working on branch `home-42-x` in x.")
     n = night(cfg, plane, FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path))
     assert n.already_picked_up("HOME-42", "home-42-x", "Ready")
     assert not n.already_picked_up("HOME-42", "home-42-y", "Ready")
+
+
+# -- night integration: sweep, triage, installation, not-bau --------------------
+def ready_verdict(it: Item) -> Comment:
+    return Comment("v", "bau@nakomis.com", "", triage_comment("ready", 1, desc_hash(it.description), "ok"))
+
+
+def triage_session(payload: dict) -> SessionResult:
+    return SessionResult("done", "", good_rl(), 0.2, f"```json\n{json.dumps(payload)}\n```")
+
+
+def test_run_order_sweep_then_triage_then_pickup(cfg, tmp_path, monkeypatch):
+    order = []
+    monkeypatch.setattr("bau.sweep.sweep_pass", lambda n: order.append("sweep"))
+    monkeypatch.setattr("bau.triage.triage_pass", lambda n: order.append("triage"))
+    n = night(cfg, FakePlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path))
+    for name in ("merge_pass", "ready_pass", "feedback_pass", "new_tickets_pass"):
+        monkeypatch.setattr(n, name, lambda name=name: order.append(name))
+    n.run()
+    assert order == ["merge_pass", "ready_pass", "feedback_pass", "sweep", "triage", "new_tickets_pass"]
+
+
+def test_a_pass_that_ends_the_night_stops_the_later_ones(cfg, tmp_path, monkeypatch):
+    order = []
+
+    def rejected(n):
+        order.append("sweep")
+        n.report.stop_reason = "rejected"
+
+    monkeypatch.setattr("bau.sweep.sweep_pass", rejected)
+    monkeypatch.setattr("bau.triage.triage_pass", lambda n: order.append("triage"))
+    n = night(cfg, FakePlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path))
+    monkeypatch.setattr(n, "new_tickets_pass", lambda: order.append("new_tickets_pass"))
+    assert n.run().stop_reason == "rejected" and order == ["sweep"]
+
+
+def test_untriaged_bau_item_is_not_picked_up(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr("bau.triage.triage_pass", lambda n: None)
+    plane = FakePlane({"HOME": [item()]})
+    report = night(cfg, plane, FakeGitHub(open_prs={REPO: []}), FakeRunner([]), FakeRepos(tmp_path)).run()
+    assert report.sessions == 0 and plane.calls == [] and report.declined == []
+
+
+def test_items_waiting_or_not_bau_are_not_picked_up_even_with_a_ready_verdict(cfg, tmp_path):
+    items = [item(labels=("BAU", "bau-questions")), item(ref="HOME-43", labels=("BAU", "not-bau"))]
+    plane = FakePlane({"HOME": items}, comments={i.ref: [ready_verdict(i)] for i in items})
+    report = night(cfg, plane, FakeGitHub(open_prs={REPO: []}), FakeRunner([]), FakeRepos(tmp_path)).run()
+    assert report.sessions == 0 and plane.calls == []
+
+
+def test_triaged_ready_item_is_picked_up_same_night(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item()]})
+    gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "green"})
+    runs = []
+
+    def on_run():
+        runs.append(1)
+        if len(runs) == 2:
+            gh.open[REPO] = [pr()]
+
+    runner = FakeRunner(
+        [
+            triage_session({"verdict": "ready", "reason": "clear", "summary": "s"}),
+            SessionResult("done", "", good_rl(), 0.5, "Opened"),
+        ],
+        on_run=on_run,
+    )
+    report = night(cfg, plane, gh, runner, FakeRepos(tmp_path)).run()
+    assert [b[0] for b in runner.briefs] == ["bau-triage-home-42", "bau-home-42"]
+    assert report.triaged == 1 and report.prs_opened == 1
+    texts = [c.text for c in plane.comments("HOME-42")]
+    assert texts[0].startswith("[bau:triage verdict=ready round=1")
+    assert texts[1].startswith("[bau:picked-up from=New]")
+
+
+def test_uninstalled_repo_does_not_end_the_night(cfg, tmp_path):
+    other = "nakomis/other"
+    projects = PROJECTS | {
+        "OTHER": ProjectConfig("OTHER", other, False),
+        "NONE": ProjectConfig("NONE", None, False),
+    }
+
+    class PartlyInstalled(StubApp):
+        def installation_token(self, repo):
+            if repo == other:
+                raise RuntimeError("no installation for nakomis/other")
+            return super().installation_token(repo)
+
+    items = [item(), item(ref="OTHER-1"), item(ref="NONE-1")]
+    plane = FakePlane(
+        {"HOME": items[:1], "OTHER": items[1:2], "NONE": items[2:]},
+        comments={i.ref: [ready_verdict(i)] for i in items},
+    )
+    gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "green"})
+    runner = FakeRunner([SessionResult("done", "", good_rl(), 0.5, "Opened")], on_run=opens_pr(gh, pr()))
+    repos = FakeRepos(tmp_path)
+    logs = []
+    n = night(cfg, plane, gh, runner, repos, app=PartlyInstalled(), logs=logs, projects=projects)
+    report = n.run()
+    assert report.stop_reason == "ok" and report.uninstalled == [other]
+    assert n.installed == {REPO}
+    assert [b[0] for b in runner.briefs] == ["bau-home-42"] and report.prs_opened == 1
+    assert ("ensure_bare", other) not in repos.calls
+    assert not any(c[1][0] in ("OTHER-1", "NONE-1") for c in plane.calls)
+    assert report.declined == []
+    assert any(other in line for line in logs)
+
+
+def test_too_big_marks_not_bau(cfg, tmp_path):
+    plane = FakePlane({"HOME": [item(state="Ready")]}, comments={"HOME-42": [ready_verdict(item())]})
+    runner = FakeRunner([SessionResult("too_big", "schema change", good_rl(), 0.1, "BAU_TOO_BIG: schema")])
+    repos = FakeRepos(tmp_path)
+    night(cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, repos).run()
+    writes = [c for c in plane.calls if c[0] in ("add_labels", "remove_labels", "comment")][-3:]
+    assert writes == [
+        ("add_labels", ("HOME-42", ["not-bau"])),
+        ("comment", ("HOME-42", "[bau] Too big for BAU: schema change. Returned to Ready. Marked not-bau.")),
+        ("remove_labels", ("HOME-42", ["BAU"])),
+    ]
+    assert ("set_state", ("HOME-42", "Ready")) in plane.calls
+    assert ("delete_checkout", "home-42-rotate-logs") in repos.calls
+    assert plane.get_item("HOME-42").labels == ["not-bau"]
+
+
+def test_closing_a_too_big_pr_marks_not_bau(cfg, tmp_path):
+    big = replace(pr(7, "HOME-40", draft=True), changed_files=20)
+    plane = FakePlane(
+        {"HOME": [item(ref="HOME-40", state="In progress")]},
+        comments={"HOME-40": [Comment("c", "bau@nakomis.com", "", "[bau:picked-up from=Ready] x")]},
+    )
+    gh = FakeGitHub(open_prs={REPO: [big]}, ci={"abc": "green"})
+    night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path)).run()
+    writes = [c for c in plane.calls if c[0] in ("add_labels", "remove_labels", "comment")]
+    assert writes == [
+        ("add_labels", ("HOME-40", ["not-bau"])),
+        (
+            "comment",
+            ("HOME-40", "[bau] Too big for BAU (20 files / 12 lines). Returned to Ready. Marked not-bau."),
+        ),
+        ("remove_labels", ("HOME-40", ["BAU"])),
+    ]

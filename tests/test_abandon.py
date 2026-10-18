@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -219,3 +220,50 @@ def test_item_without_bau_label_is_not_abandoned(tmp_path: Path):
 def test_surrounding_whitespace_is_stripped(tmp_path: Path):
     plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
     assert run(plane, tmp_path, ref=" HOME-42 ").ref == "HOME-42"
+
+
+def test_abandon_marks_not_bau(tmp_path: Path):
+    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    run(plane, tmp_path, FakeGitHub(open_prs={REPO: [make_pr()]}))
+    writes = [c for c in plane.calls if c[0] in ("add_labels", "remove_labels", "comment")]
+    assert writes == [
+        ("add_labels", ("HOME-42", ["not-bau"])),
+        ("remove_labels", ("HOME-42", ["BAU"])),
+        ("comment", ("HOME-42", "[bau:abandoned] by Martin. Returned to Ready; marked not-bau.")),
+    ]
+    assert plane.get_item("HOME-42").labels == ["not-bau"]
+
+
+def test_abandon_uses_the_repo_line_override(tmp_path: Path):
+    override = "nakomis/elsewhere"
+    plane = FakePlane(
+        {"MULTI": [replace(item(), ref="MULTI-3", description=f"repo: {override}\nfix it")]},
+        comments={"MULTI-3": [picked()]},
+    )
+    seen = []
+    gh = FakeGitHub()
+    abandon(
+        "MULTI-3",
+        plane=plane,
+        github_factory=lambda repo: seen.append(repo) or gh,
+        repos=FakeRepos(tmp_path),
+        projects={"MULTI": ProjectConfig("MULTI", None, False)},
+        worker_login="nakomis-bau[bot]",
+        worker_email="bau@nakomis.com",
+    )
+    assert seen == [override]
+
+
+def test_abandon_without_any_repo_is_an_unknown_project(tmp_path: Path):
+    plane = FakePlane({"MULTI": [replace(item(), ref="MULTI-3")]}, comments={"MULTI-3": [picked()]})
+    with pytest.raises(UnknownProject):
+        abandon(
+            "MULTI-3",
+            plane=plane,
+            github_factory=lambda repo: FakeGitHub(),
+            repos=FakeRepos(tmp_path),
+            projects={"MULTI": ProjectConfig("MULTI", None, False)},
+            worker_login="nakomis-bau[bot]",
+            worker_email="bau@nakomis.com",
+        )
+    assert plane.calls == []

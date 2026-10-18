@@ -38,7 +38,7 @@ from bau.snapshot import (
 
 DEFAULT_CONFIG = Path("/Users/nakomis/bau/src/config")
 # Stop reasons that make up a normal night; anything else (or an exception) exits non-zero.
-NORMAL_STOP_REASONS = frozenset({"ok", "cutoff", "pace", "ceiling", "paused", "five-hour", "locked"})
+NORMAL_STOP_REASONS = frozenset({"ok", "cutoff", "pace", "paused", "five-hour", "locked"})
 # How long each job waits for the shared run lock before giving up (seconds).
 RUN_LOCK_WAIT = 3600
 

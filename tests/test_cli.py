@@ -23,7 +23,7 @@ def test_config_dir_option_before_or_after_subcommand():
     assert p.parse_args(["run"]).config == Path("/Users/nakomis/bau/src/config")
 
 
-@pytest.mark.parametrize("reason", ["ok", "cutoff", "pace", "ceiling", "paused", "five-hour"])
+@pytest.mark.parametrize("reason", ["ok", "cutoff", "pace", "paused", "five-hour"])
 def test_normal_stop_reasons_exit_zero(reason):
     assert exit_code(reason) == 0
 

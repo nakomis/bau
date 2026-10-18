@@ -36,6 +36,7 @@ FAILED_ATTEMPT_PREFIXES = (
     "[bau] Session finished but no PR",
 )
 MAX_FAILED_ATTEMPTS = 2
+NOT_PICKED_LABELS = ("blocked", "bau-questions", "not-bau")
 TRIED_TWICE = "BAU tried this twice; comment on the ticket to ask for another attempt"
 
 
@@ -82,6 +83,7 @@ class NightReport:
     labelled_not_bau: int = 0
     triaged: int = 0
     asked: int = 0
+    uninstalled: list[str] = field(default_factory=list)
 
 
 class Night:
@@ -108,11 +110,11 @@ class Night:
         self.paused = paused or (lambda: cfg.paused)
         self.policy = Policy(cfg.limits, cfg.schedule, clock)
         self.report = NightReport()
-        # Repos the GitHub App is installed on: triage reads only those. Starts as every configured repo.
+        # Repos the GitHub App is installed on: every configured repo until run() has minted a token
+        # for each; from then on only those that minted. Work on any other repo is skipped.
         self.installed: set[str] = {p.repo for p in projects.values() if p.repo}
         self._tokens: dict[str, Token] = {}
         self._open: dict[str, list[PR]] = {}
-        self._open_total = 0
         self._merged: dict[str, PR] = {}
 
     # -- helpers -------------------------------------------------------------
@@ -279,9 +281,10 @@ class Night:
         """One Plane call and one GitHub call before anything else: an unreachable service ends the
         night with a snapshot that says so, rather than a crash part-way through."""
         try:
-            ident, project = next(iter(self.projects.items()))
-            self.plane._project(ident)
-            self.token(project.repo)
+            ident, repo = next(((i, p.repo) for i, p in self.projects.items() if p.repo), (None, None))
+            self.plane._project(ident or next(iter(self.projects)))
+            if repo:
+                self.token(repo)
         except Exception as e:
             self.report.stop_reason = f"preflight: {type(e).__name__}"
             self.log(f"preflight failed: {type(e).__name__}: {e}")
@@ -289,25 +292,38 @@ class Night:
         return True
 
     def run(self) -> NightReport:
+        from bau import sweep, triage  # deferred: both import this module
+
         if not self.preflight():
             return self.report
         self.report.latest = self.probe()
         if self.report.latest is None:
             self.report.telemetry = "missing"
         self.log(f"preflight: latest={self.report.latest}")
-        for repo in sorted({p.repo for p in self.projects.values()}):
-            gh = self.github_factory(repo)
+        self.installed = set()
+        for repo in sorted({p.repo for p in self.projects.values() if p.repo}):
+            try:
+                self.token(repo)
+                gh = self.github_factory(repo)
+            except Exception as e:  # an uninstalled repo must not end the night: skip its work
+                self.report.uninstalled.append(repo)
+                self.log(f"{repo}: no installation token, skipping it tonight: {type(e).__name__}: {e}")
+                continue
+            self.installed.add(repo)
             self._open[repo] = gh.open_prs(repo, self.cfg.identities.worker_github_login)
             if not self.dry_run:
                 self.repos.ensure_bare(repo, self.token(repo))
                 self.repos.fetch(repo, self.token(repo))
-        self._open_total = sum(len(v) for v in self._open.values())
         # Neither starts a session, so neither waits for the policy check.
         self.merge_pass()
         self.ready_pass()
         if not self.may_start():
             return self.report
-        self.feedback_pass()
+        # Each pass may end the night (a rate limit, the cutoff): check before starting the next one.
+        for step in (self.feedback_pass, lambda: sweep.sweep_pass(self), lambda: triage.triage_pass(self)):
+            step()
+            if self.report.stop_reason != "ok":
+                return self.report
         self.new_tickets_pass()
         return self.report
 
@@ -483,6 +499,9 @@ class Night:
         self.repos.delete_checkout(pr.head_ref)
 
     def new_tickets_pass(self) -> None:
+        from bau.triage import ready_for_pickup  # deferred: triage imports this module
+
+        worker = self.cfg.identities.worker_plane_email
         candidates: list[Item] = []
         for ident in self.projects:
             candidates += self.plane.list_items(ident, "BAU")
@@ -491,19 +510,25 @@ class Night:
         for item in sorted(candidates, key=lambda i: (order.get(i.priority, 4), i.created_at)):
             if self.report.stop_reason != "ok":
                 return
-            if "blocked" in item.labels or item.ref in open_refs or item.state.casefold() in FINISHED_STATES:
+            if any(label in NOT_PICKED_LABELS for label in item.labels):
+                continue
+            if item.ref in open_refs or item.state.casefold() in FINISHED_STATES:
+                continue
+            if repo_for(item, self.projects) is None:  # the sweep marks these not-bau
                 continue
             try:
-                if not self.new_ticket_one(item):
+                comments = self.plane.comments(item.ref)
+                if not ready_for_pickup(item, comments, worker):
+                    continue
+                if not self.new_ticket_one(item, comments):
                     return
             except Exception as e:
                 self.errored(item.ref, e)
 
-    def failed_attempts(self, ref: str) -> tuple[list[Comment], list[Comment]]:
+    def failed_attempts(self, comments: list[Comment]) -> tuple[list[Comment], list[Comment]]:
         """The worker's attempt-ending comments since the owner last commented, and every comment
         since then. An owner comment re-opens the ticket to new attempts."""
         ids = self.cfg.identities
-        comments = self.plane.comments(ref)
         start = 0
         for i, c in enumerate(comments):
             if c.author_email == ids.owner_plane_email:
@@ -516,25 +541,27 @@ class Night:
         ]
         return failures, recent
 
-    def new_ticket_one(self, item: Item) -> bool:
+    def new_ticket_one(self, item: Item, comments: list[Comment]) -> bool:
         """Handle one candidate. Returns False when the night must stop."""
         merged = self._merged.get(item.ref)
         if merged is not None:
             self.log(f"{item.ref}: PR #{merged.number} is already merged; closing the loop instead")
             self.merge_one(merged, item.ref)
             return True
-        failures, recent = self.failed_attempts(item.ref)
+        failures, recent = self.failed_attempts(comments)
         if len(failures) >= MAX_FAILED_ATTEMPTS:
             self.decline(item, TRIED_TWICE, seen=recent)
             return True
         previous = failures[-1].text if failures else None
-        known = {p.repo for p in self.projects.values()}
+        known = {p.repo for p in self.projects.values() if p.repo}
         repo = repo_for(item, self.projects)
         if not repo:
-            self.decline(item, "no repository mapped for this project; add it to projects.yaml")
             return True
         if repo not in known:
             self.decline(item, f"repo override {repo} is not in projects.yaml")
+            return True
+        if repo not in self.installed:
+            self.log(f"{item.ref}: {repo} has no GitHub App installation; skipped tonight")
             return True
         if not item.description.strip():
             self.decline(item, "ticket has no description; BAU needs one to work from")
@@ -563,8 +590,15 @@ class Night:
         gh.comment(repo, opened.number, f"[bau] Closing: {detail} exceeds the BAU size limit.")
         gh.close_pr(repo, opened.number)
         self.plane.set_state(item.ref, back)
-        self.plane.comment(item.ref, f"[bau] Too big for BAU ({detail}). Returned to {back}.")
+        self.mark_not_bau(item.ref, f"[bau] Too big for BAU ({detail}). Returned to {back}. Marked not-bau.")
         self.repos.delete_checkout(branch)
+
+    def mark_not_bau(self, ref: str, text: str) -> None:
+        """not-bau first, then the comment, then BAU off: a failure part-way leaves the item held by
+        not-bau, never unlabelled where the sweep could pick it up again."""
+        self.plane.add_labels(ref, ["not-bau"])
+        self.plane.comment(ref, text)
+        self.plane.remove_labels(ref, ["BAU"])
 
     def reject_if_too_big(
         self, item: Item, repo: str, gh: GitHubClient, opened: PR, branch: str, back: str
@@ -632,7 +666,9 @@ class Night:
         )
         if result.outcome == "too_big":
             self.plane.set_state(item.ref, back)
-            self.plane.comment(item.ref, f"[bau] Too big for BAU: {result.reason}. Returned to {back}.")
+            self.mark_not_bau(
+                item.ref, f"[bau] Too big for BAU: {result.reason}. Returned to {back}. Marked not-bau."
+            )
             self.repos.delete_checkout(branch)
             return
         if result.outcome != "done":
@@ -648,7 +684,6 @@ class Night:
         if self.reject_if_too_big(item, repo, gh, opened, branch, back):
             return
         self.report.prs_opened += 1
-        self._open_total += 1
         self.plane.link(item.ref, opened.url, f"PR #{opened.number}")
         ci = self.wait_for_ci(gh, repo, opened.head_sha)
         if ci == "red" and self.may_start():
