@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -178,7 +179,7 @@ def test_sweep_pass_session_is_sandboxed(cfg):
 
 
 def test_sweep_pass_no_repo_named_needs_no_session(cfg):
-    plane = FakePlane({"NOREPO": [item("NOREPO-1"), item("NOREPO-2", desc="repo: nakomis/x")]})
+    plane = FakePlane({"NOREPO": [item("NOREPO-1"), item("NOREPO-2", desc="repo: nakomis/home-infra")]})
     runner = FakeRunner([verdicts(("NOREPO-2", "bau", "ok"))])
     n = make_night(cfg, plane, runner)
     sweep_pass(n)
@@ -288,3 +289,40 @@ def test_sweep_pass_batches_log_to_separate_files(cfg):
         make_night(cfg, FakePlane({"HOME": [item("HOME-1"), item("HOME-2")]}), Spy([verdicts(), verdicts()]))
     )
     assert len(logs) == 2 and len(set(logs)) == 2 and logs[0].endswith("sweep-HOME-1.log")
+
+
+# -- batches vary by night (I5) -------------------------------------------------
+def batches_on(cfg, day):
+    cfg = replace(cfg, limits=replace(cfg.limits, sweep_batch_items=2))
+    plane = FakePlane({"HOME": [item(f"HOME-{i}") for i in range(1, 7)]})
+    runner = FakeRunner([verdicts(), verdicts(), verdicts()])
+    n = make_night(cfg, plane, runner)
+    n.clock = lambda: NOW.replace(day=day)
+    sweep_pass(n)
+    return [frozenset(re.findall(r"<<<ITEM (HOME-\d+)", b[2])) for b in runner.briefs]
+
+
+def test_sweep_batches_are_regrouped_each_night_so_a_failing_batch_is_split_up(cfg):
+    nights = [batches_on(cfg, day) for day in range(18, 22)]
+    assert batches_on(cfg, 18) == nights[0]  # deterministic for a given night
+    assert all(set().union(*b) == {f"HOME-{i}" for i in range(1, 7)} for b in nights)
+    assert len({frozenset(b) for b in nights}) > 1  # the same items are not always batched together
+
+
+# -- repo not configured, and the cut-off (M3, M4) -------------------------------
+def test_sweep_marks_an_unconfigured_repo_override_not_bau_without_a_session(cfg):
+    plane = FakePlane({"HOME": [item("HOME-1", desc="repo: nakomis/elsewhere")]})
+    runner = FakeRunner([])
+    n = make_night(cfg, plane, runner)
+    sweep_pass(n)
+    assert runner.briefs == []
+    assert plane.calls[0] == ("add_labels", ("HOME-1", ["not-bau"]))
+    assert plane.calls[1][1][1].endswith("\n\nrepo not configured for BAU")
+
+
+@pytest.mark.parametrize("desc, ident", [("do it", "NOREPO"), ("repo: nakomis/elsewhere", "HOME")])
+def test_sweep_writes_nothing_past_the_cutoff(cfg, desc, ident):
+    plane = FakePlane({ident: [item(f"{ident}-1", desc=desc)]})
+    n = make_night(cfg, plane, FakeRunner([]), hour=5)
+    sweep_pass(n)
+    assert plane.calls == [] and n.report.stop_reason == "cutoff"

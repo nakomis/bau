@@ -39,6 +39,13 @@ class Policy:
         self.schedule = schedule
         self.clock = clock
 
+    def past_cutoff(self) -> bool:
+        now = self.clock()
+        if now.tzinfo is None:
+            raise ValueError("policy clock must return a timezone-aware datetime")
+        local = now.astimezone(ZoneInfo(self.schedule.timezone))
+        return local.time() >= self.schedule.no_new_sessions_after
+
     def can_start_session(
         self,
         *,
@@ -50,12 +57,9 @@ class Policy:
             return Decision(False, "paused")
         if latest is not None and latest.status == "rejected":
             return Decision(False, "rejected")
-        now = self.clock()
-        if now.tzinfo is None:
-            raise ValueError("policy clock must return a timezone-aware datetime")
-        local = now.astimezone(ZoneInfo(self.schedule.timezone))
-        if local.time() >= self.schedule.no_new_sessions_after:
+        if self.past_cutoff():
             return Decision(False, "cutoff")
+        now = self.clock()
         if latest is None or latest.seven_day is None or latest.five_hour is None:
             if sessions_started < self.limits.fail_closed_sessions:
                 return Decision(True, "telemetry-missing")
