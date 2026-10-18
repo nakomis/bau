@@ -128,3 +128,13 @@ def test_projects_yaml_covers_every_code_project():
     assert not {"BCON", "HARM", "MONEY", "BENCH"} & projects.keys()
     for p in projects.values():
         assert p.deploy_action if p.deploys else True, p.identifier
+
+
+def test_projects_yaml_deploys_flags_match_the_workflows():
+    projects = load_projects(Path(__file__).parent.parent / "config" / "projects.yaml")
+    for ident in ("NAKIS", "SCRUM", "BAPP", "CRYPT", "RECIP", "HOME"):
+        assert projects[ident].deploys, ident
+    for ident in ("CTHU", "PISH", "BAU"):
+        assert not projects[ident].deploys, ident
+    assert "promote" in projects["BAPP"].deploy_action
+    assert projects["SCRUM"].deploy_action == "Run the promote-prod workflow in GitHub Actions"
