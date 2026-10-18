@@ -43,10 +43,8 @@ class Policy:
         self,
         *,
         latest: RateLimit | None,
-        open_prs: int,
         sessions_started: int,
         paused: bool,
-        new_ticket: bool,
     ) -> Decision:
         if paused:
             return Decision(False, "paused")
@@ -58,8 +56,6 @@ class Policy:
         local = now.astimezone(ZoneInfo(self.schedule.timezone))
         if local.time() >= self.schedule.no_new_sessions_after:
             return Decision(False, "cutoff")
-        if new_ticket and open_prs >= self.limits.open_pr_ceiling:
-            return Decision(False, "ceiling")
         if latest is None or latest.seven_day is None or latest.five_hour is None:
             if sessions_started < self.limits.fail_closed_sessions:
                 return Decision(True, "telemetry-missing")

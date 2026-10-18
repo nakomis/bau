@@ -16,7 +16,6 @@ class KeychainRef:
 
 @dataclass(frozen=True)
 class Limits:
-    open_pr_ceiling: int
     pace_margin: float
     five_hour_kill: float
     session_wall_clock_minutes: int
@@ -26,6 +25,23 @@ class Limits:
     too_big_files: int
     too_big_lines: int
     sweep_session_wall_clock_minutes: int
+    triage_budget_usd: float
+    triage_wall_clock_minutes: int
+    max_question_rounds: int
+    sweep_owner_quiet_days: int
+    sweep_batch_items: int
+
+
+@dataclass(frozen=True)
+class Nudge:
+    prs_warn_count: int
+    prs_warn_days: int
+    prs_down_count: int
+    prs_down_days: int
+    questions_warn_count: int
+    questions_warn_days: int
+    questions_down_count: int
+    questions_down_days: int
 
 
 @dataclass(frozen=True)
@@ -98,12 +114,13 @@ class Config:
     claude: ClaudeConfig
     paths: Paths
     container: Container
+    nudge: Nudge
 
 
 @dataclass(frozen=True)
 class ProjectConfig:
     identifier: str
-    repo: str
+    repo: str | None
     deploys: bool
     deploy_action: str = ""
 
@@ -148,6 +165,7 @@ def load_config(path: Path) -> Config:
         claude=ClaudeConfig(oauth_token=_keychain(raw["claude"]["oauth_token"])),
         paths=Paths(**{k: Path(v).expanduser() for k, v in raw["paths"].items()}),
         container=Container(**raw["container"]),
+        nudge=Nudge(**raw["nudge"]),
     )
 
 
@@ -172,6 +190,6 @@ def paused_reader(path: Path, initial: bool) -> Callable[[], bool]:
 def load_projects(path: Path) -> dict[str, ProjectConfig]:
     raw = yaml.safe_load(Path(path).read_text())["projects"]
     return {
-        ident: ProjectConfig(ident, p["repo"], bool(p.get("deploys", False)), p.get("deploy_action", ""))
+        ident: ProjectConfig(ident, p.get("repo"), bool(p.get("deploys", False)), p.get("deploy_action", ""))
         for ident, p in raw.items()
     }

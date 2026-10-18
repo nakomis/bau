@@ -4,7 +4,7 @@ from bau.github import Thread, ThreadComment
 from bau.plane import Comment, Item
 from bau.prompts import HOUSE_PROMPT, build_brief
 
-LIMITS = Limits(50, 0.10, 0.80, 60, 5.0, 2, 3, 15, 400, 15)
+LIMITS = Limits(0.10, 0.80, 60, 5.0, 2, 3, 15, 400, 15, 1.25, 10, 4, 7, 40)
 NONCE = "abcd1234"
 ITEM = Item(
     "HOME-42",

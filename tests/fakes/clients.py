@@ -58,6 +58,24 @@ class FakePlane:
         for items in self.items.values():
             items[:] = [replace(i, state=state) if i.ref == ref else i for i in items]
 
+    def _relabel(self, ref, names, add: bool):
+        delta = set(names)
+        for items in self.items.values():
+            items[:] = [
+                replace(i, labels=sorted((set(i.labels) | delta) if add else (set(i.labels) - delta)))
+                if i.ref == ref
+                else i
+                for i in items
+            ]
+
+    def add_labels(self, ref, names):
+        self.calls.append(("add_labels", (ref, names)))
+        self._relabel(ref, names, True)
+
+    def remove_labels(self, ref, names):
+        self.calls.append(("remove_labels", (ref, names)))
+        self._relabel(ref, names, False)
+
     def __getattr__(self, name):
         def record(*args, **kwargs):
             self.calls.append((name, args))

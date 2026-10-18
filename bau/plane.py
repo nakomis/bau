@@ -27,6 +27,8 @@ class Item:
     created_at: str
     assignees: list[str] = field(default_factory=list)
     updated_at: str = ""
+    state_group: str = ""
+    updated_by: str = ""
 
 
 @dataclass(frozen=True)
@@ -169,6 +171,8 @@ class PlaneClient:
             created_at=raw.get("created_at", ""),
             assignees=[meta["members"].get(a, a) for a in raw.get("assignees", [])],
             updated_at=raw.get("updated_at", "") or "",
+            state_group=meta["state_groups"].get(raw.get("state"), ""),
+            updated_by=meta["members"].get(raw.get("updated_by"), "") if raw.get("updated_by") else "",
         )
 
     # ── reads ────────────────────────────────────────────────────────────
@@ -224,9 +228,11 @@ class PlaneClient:
 
     def add_labels(self, ref: str, names: list[str]) -> None:
         meta, raw = self._item(ref)
-        unknown = [n for n in names if n not in meta["labels"]]
-        if unknown:
-            raise ValueError(f"Unknown label(s) {unknown}")
+        for n in names:
+            if n not in meta["labels"]:
+                path = f"/projects/{meta['project']['id']}/labels/"
+                created = self._request("POST", path, json={"name": n})
+                meta["labels"][n] = created["id"]
         current = set(raw.get("labels", [])) | {meta["labels"][n] for n in names}
         self._patch(ref, {"labels": sorted(current)})
 

@@ -206,10 +206,8 @@ class Sweep:
             self.latest = self.probe()
         decision = self.policy.can_start_session(
             latest=self.latest,
-            open_prs=0,
             sessions_started=self.report.sessions,
             paused=self.paused(),
-            new_ticket=False,
         )
         if not decision.allowed:
             self.report.stop_reason = decision.reason

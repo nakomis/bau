@@ -66,7 +66,17 @@ def test_list_items_filters_by_label_and_formats():
     items = c.list_items("HOME", "BAU")
     assert items == [
         Item(
-            "HOME-42", "i1", "p1", "Fix thing", "Do it", "New", ["BAU"], "medium", "2026-10-01T00:00:00Z", []
+            "HOME-42",
+            "i1",
+            "p1",
+            "Fix thing",
+            "Do it",
+            "New",
+            ["BAU"],
+            "medium",
+            "2026-10-01T00:00:00Z",
+            [],
+            state_group="unstarted",
         )
     ]
     assert c.list_items("HOME", "blocked") == []
@@ -168,14 +178,12 @@ def test_transport_errors_are_wrapped(monkeypatch):
         make(handler)._request("GET", "/projects/")
 
 
-def test_unknown_project_state_label_and_member_raise_value_error():
+def test_unknown_project_state_and_member_raise_value_error():
     c = make(lambda r: routes(r, []))
     with pytest.raises(ValueError, match="No Plane project NOPE"):
         c.list_items("NOPE", "BAU")
     with pytest.raises(ValueError, match="Unknown state 'Nope'"):
         c.set_state("HOME-42", "Nope")
-    with pytest.raises(ValueError, match="Unknown label"):
-        c.add_labels("HOME-42", ["nope"])
     with pytest.raises(ValueError, match="No Plane member nobody@nakomis.com"):
         c.assign("HOME-42", "nobody@nakomis.com")
 
@@ -221,3 +229,38 @@ def test_create_item_named_state_and_unknown_state():
     assert json.loads(calls[-1][2])["state"] == "s-prog"
     with pytest.raises(ValueError, match="Unknown state"):
         c.create_item("HOME", "x", "y", state="Nope")
+
+
+def test_add_labels_creates_missing_label():
+    calls: list = []
+
+    def handler(r):
+        if r.method == "POST" and r.url.path.endswith("/projects/p1/labels/"):
+            calls.append(("POST", r.url.path, r.content))
+            return httpx.Response(201, json={"id": "l-notbau", "name": "not-bau"})
+        return routes(r, calls)
+
+    c = make(handler)
+    c.add_labels("HOME-42", ["not-bau"])
+    posts = [x for x in calls if x[0] == "POST"]
+    assert len(posts) == 1
+    assert json.loads(posts[0][2]) == {"name": "not-bau"}
+    patch = next(json.loads(x[2]) for x in calls if x[0] == "PATCH")
+    assert patch == {"labels": ["l-bau", "l-notbau"]}
+    # the cached meta now knows the label, so a second call creates nothing
+    c.add_labels("HOME-42", ["not-bau"])
+    assert len([x for x in calls if x[0] == "POST"]) == 1
+
+
+def test_format_fills_state_group_and_updated_by():
+    raw = {**ITEM, "updated_by": "u-m"}
+    c = make(
+        lambda r: (
+            httpx.Response(200, json={"results": [raw], "next_page_results": False})
+            if r.url.path.endswith("/work-items/")
+            else routes(r, [])
+        )
+    )
+    item = c.list_items("HOME", "BAU")[0]
+    assert item.state_group == "unstarted"
+    assert item.updated_by == "martin@nakomis.com"

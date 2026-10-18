@@ -183,13 +183,11 @@ class Night:
         if not any(text in c.text for c in pool):
             self.plane.comment(item.ref, text)
 
-    def may_start(self, *, new_ticket: bool) -> bool:
+    def may_start(self) -> bool:
         d = self.policy.can_start_session(
             latest=self.report.latest,
-            open_prs=self._open_total,
             sessions_started=self.report.sessions,
             paused=self.paused(),
-            new_ticket=new_ticket,
         )
         if d.reason == "telemetry-missing":
             self.report.telemetry = "missing"
@@ -270,7 +268,7 @@ class Night:
         # Neither starts a session, so neither waits for the policy check.
         self.merge_pass()
         self.ready_pass()
-        if not self.may_start(new_ticket=False):
+        if not self.may_start():
             return self.report
         self.feedback_pass()
         self.new_tickets_pass()
@@ -379,7 +377,7 @@ class Night:
         if self.dry_run:
             self.report.planned.append(f"feedback {ref} -> {repo} PR #{pr.number}")
             return
-        if not self.may_start(new_ticket=False):
+        if not self.may_start():
             return
         # Never reuse a checkout an earlier session wrote: delete it and clone the branch afresh.
         self.repos.delete_checkout(pr.head_ref)
@@ -517,7 +515,7 @@ class Night:
         if self.dry_run:
             self.report.planned.append(f"new-ticket {item.ref} -> {repo} ({model})")
             return True
-        if not self.may_start(new_ticket=True):
+        if not self.may_start():
             return False
         self.work_new_ticket(item, repo, gh, model, previous)
         return self.report.stop_reason == "ok"
@@ -616,7 +614,7 @@ class Night:
         self._open_total += 1
         self.plane.link(item.ref, opened.url, f"PR #{opened.number}")
         ci = self.wait_for_ci(gh, repo, opened.head_sha)
-        if ci == "red" and self.may_start(new_ticket=False):
+        if ci == "red" and self.may_start():
             ci, opened = self.fix_red_ci(item, repo, gh, model, opened, branch, back)
             if ci is None:
                 return
