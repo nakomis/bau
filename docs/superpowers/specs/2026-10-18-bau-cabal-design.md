@@ -2,6 +2,7 @@
 
 Date: 18 October 2026
 Status: approved by Martin 18 Oct 2026 (session "bau-pipeline", 18 Oct 2026). Plane: BAU-23.
+Amended 19 Oct 2026 against BAU-21 as merged (PR #8); see section 13. Plan: `docs/superpowers/plans/2026-10-19-bau-cabal.md`.
 Builds on: `2026-10-14-bau-design.md` and `2026-10-18-bau-questions-design.md` (BAU-21: labels, marker comments, the Questions section, the answers API). Where this document and those disagree, this one wins for Cabal requests only.
 
 ## 1. Intent
@@ -65,7 +66,7 @@ A **Cabal** section, above Questions, in the same card style (layout A):
 
 ## 7. Write API and Plane records
 
-- `POST /cabal/{ref}/approve` with `{n, prompt, comment?}`: under the run lock, checks the item carries `bau-cabal` and its latest request is `n` (else 409), records the approval, and starts the Lambda call in the background; returns 202. When the call returns, the host posts `[bau:cabal-answers n=<n> data=…]` (each provider's answer and cost, the prompt actually sent, whether it was edited, Martin's comment if any) with a readable rendering above it, then removes `bau-cabal`. On failure it posts nothing and records the error for the dashboard; the label stays.
+- `POST /cabal/{ref}/approve` with `{n, prompt, comment?}`: under the API's own per-ticket lock (not the run lock; section 13), checks the item carries `bau-cabal` and its latest request is `n` (else 409), records the approval, and starts the Lambda call in the background; returns 202. When the call returns, the host posts `[bau:cabal-answers n=<n> data=…]` (each provider's answer and cost, the prompt actually sent, whether it was edited, Martin's comment if any) with a readable rendering above it, then removes `bau-cabal`. On failure it posts nothing and records the error for the dashboard; the label stays.
 - `POST /cabal/{ref}/deny` with `{n, comment?}`: posts `[bau:cabal-denied n=<n> data=…]` with Martin's comment (or "Martin declined; use your own judgement"), then removes `bau-cabal`.
 - Only worker-authored comments carry these markers (same authority rule as BAU-21). Comments and edited prompts from Martin are cleaned so they cannot forge a marker, but keep their line breaks.
 - The next session's brief (ticket or feedback session) includes the request and its answers or denial as owner-provided data: the Cabal's answers are labelled as untrusted model output, Martin's comment and edits as owner text.
@@ -78,7 +79,7 @@ A **Cabal** section, above Questions, in the same card style (layout A):
 - Invoked directly with `lambda:InvokeFunction` (no API Gateway: its 29-second limit is too short).
 - Infrastructure as CDK in the repo that owns the shared AWS stacks (`nakomis-infra`, or alongside `cabal-mcp`; builder's choice, noted in the plan), sandbox and production like the other stacks.
 
-**Cere's access (follow Cal's pattern exactly):** the home CA certificate (SSM `/home-certs/<env>/ca-cert-pem`) is the Roles Anywhere trust anchor; a role whose trust policy pins the certificate CN to Cere's, permitted only `lambda:InvokeFunction` on this function; a Roles Anywhere profile for it. Cere gets `aws_signing_helper` and a `credential_process` profile in `~/.aws/config` (as the conversation-memory forwarder does on the Macs; see home-infra `docs/runbooks/conversation-memory-ingest-bootstrap.md`). The trust anchor, profile and role ARNs live in Parameter Store under a `/bau/cabal/` prefix. No static AWS key anywhere on Cere. The Cere playbook installs the helper and writes the profile.
+**Cere's access (follow Cal's pattern exactly):** the existing home CA trust anchor (`home-ca-prod`, its ARN read from SSM `/conversation-memory/prod/trust-anchor-arn`, as `ProjectionsPublishStack` in home-infra already does; no second anchor over the same CA) is the Roles Anywhere trust anchor; a role whose trust policy pins the certificate CN to Cere's, permitted only `lambda:InvokeFunction` on this function; a Roles Anywhere profile for it. Cere gets `aws_signing_helper` and a `credential_process` profile in `~/.aws/config` (as the conversation-memory forwarder does on the Macs; see home-infra `docs/runbooks/conversation-memory-ingest-bootstrap.md`). The trust anchor, profile and role ARNs live in Parameter Store under a `/bau/cabal/` prefix. No static AWS key anywhere on Cere. The Cere playbook installs the helper and writes the profile.
 
 Optionally (not required for BAU-23), the Cabal MCP on Martin's Macs can switch to the same Lambda later, giving one implementation and one cost log.
 
@@ -91,7 +92,7 @@ Optionally (not required for BAU-23), the Cabal MCP on Martin's Macs can switch 
 
 ## 10. Claude's calls (from the builder check; Martin to confirm while reading)
 
-- **Run lock.** Approve and deny take the run lock only for their Plane writes (seconds), never for the Lambda call, so Martin can approve while the night is running; if the lock is busy for the writes, the API retries for up to 60 seconds before giving up with the error on the card.
+- **Run lock.** ~~Approve and deny take the run lock only for their Plane writes (seconds), never for the Lambda call, so Martin can approve while the night is running; if the lock is busy for the writes, the API retries for up to 60 seconds before giving up with the error on the card.~~ Superseded by section 13: the night holds the run lock for its whole run, so Cabal writes do not take it at all.
 - **No double spend, no lost answers.** Each request has an id `<ref>#<n>`. The Lambda stores every result in DynamoDB under that id (30-day TTL) and, given an id it has already answered, returns the stored result without calling the providers again. The host therefore posts answers idempotently: an API restart mid-call, or a crash after the Lambda returned, just means approving again (or the host retrying) fetches the stored answers at no extra cost. "In flight" lives only in the API process's memory; a second approve while one is in flight is refused with 409, and deny is refused until the call settles.
 - **Environment.** Cere calls the production Lambda with the production trust anchor; the sandbox stack exists for testing from Martin's Mac and CI.
 - **Provider keys.** Reuse the parameters `cabal-mcp` already reads (`/cabal-mcp/<name>`, its existing SSM backend); the Lambda role gets read access on that prefix only, and the Lambda sets no keychain path. Prerequisite 11's "copy keys" becomes "confirm they are in the production account".
@@ -113,3 +114,22 @@ Optionally (not required for BAU-23), the Cabal MCP on Martin's Macs can switch 
 - The cost table's exact schema.
 - Which repo hosts the Lambda's CDK, with a line in the plan saying why.
 - Whether the background call on approval is a thread in the API process or a small job runner, provided an API restart mid-call leaves the item in the queue with its label (so it can be approved again).
+
+## 13. Amendments after BAU-21 merged (19 Oct 2026)
+
+Ruled while writing the plan, against `main` after PR #8. Where these and sections 1 to 12 disagree, these win.
+
+- **No run lock for Cabal writes.** `bau run` holds `run.lock` for the whole night (it waits up to an hour for it, then keeps it until the run ends), so sections 7 and 10 as written would refuse every approval made at night. Approve and deny instead serialise on a per-ticket lock inside the API process. That is safe because the label is the guard: nothing in the night touches an item carrying `bau-cabal`, and the host always posts its answers or denial comment before removing the label, so whenever the night sees the item unlabelled the comment is already there.
+- **How the ticket resumes.** A request leaves an open BAU PR (a draft mid-ticket), and the night never picks up a new ticket that has an open PR. So the next session is always a feedback session: an answers or denial comment that has no `[bau:ack <comment id>]` from the worker counts as pending feedback, alongside review threads and Plane comments. After a `done` feedback session the host acknowledges it like any Plane comment. `ready_pass` must not mark a PR ready while its item carries `bau-cabal` or has an unacknowledged Cabal response.
+- **No PR, no request.** If a new-ticket session ends with `BAU_CABAL` but no open PR exists on its branch, the request is dropped with a Plane comment and the session counts as "finished but no PR" (a failed attempt), because the next session would otherwise restart from main.
+- **A Cabal stop in a feedback session acknowledges nothing.** The feedback it was given comes round again in the next session, with the answers.
+- **`BAU_TOO_BIG` wins** over `BAU_CABAL` if a final message carries both.
+- **Merging withdraws.** If the PR is merged while the request is pending, the merge pass removes `bau-cabal` with a comment; approve then refuses with 409.
+- **Request id and claim.** The Lambda input gains `request_id` (`<ref>#<n>`; optional, and without it nothing is cached, so the Macs can call it too). Before calling any provider the Lambda claims the id with a conditional write; a second invocation while the claim is live (younger than the 10-minute timeout plus a minute) returns `{"status": "in_progress"}` without calling the providers. That is what stops an API restart followed by a re-approval paying twice. A call where every provider errored is a failure: the claim is released and nothing is stored.
+- **Estimate mode.** The Lambda also accepts `{"mode": "estimate", prompt, system?}` and returns the cost estimate from `cabal`'s pricing table without calling a provider; the snapshot job uses it. If it fails, the estimate is shown as unavailable.
+- **Pounds.** `cabal` prices in dollars; `config/bau.yaml` holds `cabal.usd_to_gbp` for display.
+- **Where the Lambda lives.** `nakomis/mcps`: the code in `cabal-mcp/lambda/`, the stack in `infra/` beside `McpsAlexaAnnounceStack`. That repo already deploys a Python Lambda from a sibling directory with `uv` bundling, and the `cabal` package can be packaged without a cross-repo dependency.
+- **Secrets in the Lambda.** `cabal.secrets` already falls through to SSM `/cabal-mcp/<name>` when the keychain is absent, so no new backend is needed. `cabal.tracelog` gains `CABAL_TRACE_DIR=off`, which the Lambda sets.
+- **Roles Anywhere only in production.** The role and profile for Cere exist only in the prod stack; the sandbox stack has the function and tables, invoked with admin credentials. The certificate is Cere's existing Home CA pair (`CN=cere`, from `/hosts/cere/mtls/*`, installed at `~/.config/bau/cere.{crt,key}.pem`).
+- **Leia's body limit.** `bau.home.nakomis.com` on Leia has `client_max_body_size 8k`, sized for an abandon note. An approve body carries up to `cabal_prompt_max_chars` of prompt, so it must rise (to 128k).
+- **Write paths.** `bau/cabal.py` (approve, deny and posting a request) joins the list of modules allowed to drive Plane writes in `CLAUDE.md`.
