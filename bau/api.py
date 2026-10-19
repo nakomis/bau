@@ -28,6 +28,21 @@ from bau.snapshot import drop_open_pr, drop_question, read_snapshot
 
 log = logging.getLogger(__name__)
 
+# The dashboard is a same-origin static page that fetches /state.json and posts
+# to /abandon, so nothing outside 'self' is needed (fonts are bundled).
+SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self'; style-src 'self'; "
+        "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+# The page names its hashed assets, so it must be re-checked on every load
+# after an upgrade; the hashed assets themselves may be cached.
+NO_CACHE_PATHS = {"/", "/index.html"}
+
 
 class Forbidden(Exception):
     pass
@@ -59,6 +74,15 @@ def create_app(
     proxy_token: str,
 ) -> FastAPI:
     app = FastAPI(title="bau")
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        for name, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(name, value)
+        if request.url.path in NO_CACHE_PATHS:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.get("/state.json")
     def state():

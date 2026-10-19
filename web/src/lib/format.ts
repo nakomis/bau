@@ -25,31 +25,64 @@ export function relativeTime(iso: string, now: number = Date.now()): string {
   return plural(Math.floor(hours / 24), 'day');
 }
 
-export function isStale(iso: string, now: number = Date.now()): boolean {
+/** How far ahead of our own clock a snapshot's timestamp may be before it is not trusted. */
+export const CLOCK_SKEW_MS = 5 * 60_000;
+
+/** The producer writes RFC 3339 (`...Z`, with microseconds when non-zero); BD-1 parses nothing looser. */
+const RFC3339 = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)$/i;
+
+/**
+ * Stale as BD-1 judges it (status.rs `bau_status_from`): older than 26 hours,
+ * more than five minutes in the future, or absent / not strict RFC 3339 (which
+ * cannot be trusted, so counts as stale).
+ */
+export function isStale(iso: string | undefined, now: number = Date.now()): boolean {
+  if (typeof iso !== 'string' || !RFC3339.test(iso)) return true;
   const then = Date.parse(iso);
-  if (Number.isNaN(then)) return false;
+  if (Number.isNaN(then)) return true;
+  if (then > now) return then - now > CLOCK_SKEW_MS;
   return now - then > STALE_HOURS * 3_600_000;
 }
 
-/** Returns the URL only if it is https; anything else (javascript:, data:, http:, garbage) is dropped. */
+/** A run counts as failed when it stopped for a `failed*` or `preflight*` reason, or was `rejected`. */
+export function isFailedStop(reason: unknown): boolean {
+  if (typeof reason !== 'string') return false;
+  return reason.startsWith('failed') || reason.startsWith('preflight') || reason === 'rejected';
+}
+
+/** The only hosts the snapshot's links may point at: GitHub pull requests and Plane items. */
+const LINK_HOSTS = new Set(['github.com', 'plane.home.nakomis.com']);
+
+/** Returns the URL only if it is https on an allowed host; anything else (javascript:, data:, http:, other hosts, garbage) is dropped. */
 export function safeHref(url: string | undefined): string | undefined {
   if (!url) return undefined;
   try {
-    return new URL(url).protocol === 'https:' ? url : undefined;
+    const u = new URL(url);
+    return u.protocol === 'https:' && LINK_HOSTS.has(u.hostname) ? url : undefined;
   } catch {
     return undefined;
   }
 }
 
-/** Coerces whatever came back into something the UI can render without crashing. */
+/**
+ * Coerces a snapshot into something the UI can render without crashing. Only
+ * `missing: true` means "no snapshot yet"; a body that is not an object at all
+ * is a bad snapshot and throws, which the page shows as red (BD-1: unreachable).
+ */
 export function normaliseSnapshot(raw: unknown): Snapshot {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return { schema: 1, missing: true };
+    throw new Error('state.json was not a snapshot object');
   }
   const s = raw as Snapshot;
+  // A non-string stop reason is no reason (BD-1 reads it as None), and must not reach the DOM.
+  const last_run =
+    s.last_run && typeof s.last_run === 'object' && typeof s.last_run.stop_reason !== 'string'
+      ? { ...s.last_run, stop_reason: '' }
+      : s.last_run;
   const list = <T>(v: T[] | undefined): T[] => (Array.isArray(v) ? v : []);
   return {
     ...s,
+    last_run,
     open_prs: list(s.open_prs),
     deploy_pending: list(s.deploy_pending),
     declined: list(s.declined),

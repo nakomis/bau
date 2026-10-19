@@ -51,7 +51,7 @@ cut-off, and per-session budget and wall-clock limits, so the worker never eats 
 | `container/` | The agent image and the egress allow-list proxy |
 | `config/` | `bau.yaml` (policy and paths) and `projects.yaml` (Plane project to repo map) |
 | `launchd/` | The scheduled jobs |
-| `web/` | The dashboard (Vite + React) |
+| `web/` | The dashboard (Vite + React), served at `https://bau.home.nakomis.com/` once Cere is wired (HOME-445); see `docs/runbook.md` |
 | `docs/` | Spec, plans, runbook, architecture diagram |
 
 ## Install on Cere

@@ -1,16 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import DeployList from './components/DeployList';
+import Footer from './components/Footer';
+import Header from './components/Header';
 import LastRun from './components/LastRun';
 import PrTable from './components/PrTable';
 import Questions from './components/Questions';
-import {
-  abandon,
-  fetchState,
-  isStale,
-  markNotBau,
-  relativeTime,
-  submitAnswers,
-} from './lib/format';
+import TierBanner from './components/TierBanner';
+import { abandon, fetchState, isStale, markNotBau, submitAnswers } from './lib/format';
+import { computeTier } from './lib/tier';
 import type { Answer, Snapshot } from './types';
 
 const MAX_NOTICES = 5;
@@ -43,7 +40,14 @@ export default function App() {
   useEffect(() => {
     void refresh();
     const id = setInterval(() => void refresh(), REFRESH_MS);
-    return () => clearInterval(id);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [refresh]);
 
   const notify = useCallback((text: string) => {
@@ -87,73 +91,63 @@ export default function App() {
   );
 
   const generated = snap?.generated_at;
-  const prs = [...(snap?.open_prs ?? [])].sort((a, b) => b.age_days - a.age_days);
+  const prs = snap?.open_prs ?? [];
+  const tier = snap === null && !loadError ? null : computeTier(snap, loadError);
 
   return (
-    <main className="mx-auto max-w-4xl px-4 py-6">
-      <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h1 className="text-2xl font-bold">BAU</h1>
-        {generated && (
-          <span className="text-sm text-neutral-500" title={generated}>
-            updated {relativeTime(generated)}
-          </span>
-        )}
-        {generated && isStale(generated) && (
-          <span className="rounded bg-red-600 px-2 py-0.5 text-xs font-semibold text-white">
-            stale
-          </span>
-        )}
-        {snap?.paused && (
-          <span className="rounded bg-amber-500 px-2 py-0.5 text-xs font-semibold text-black">
-            PAUSED
-          </span>
-        )}
-      </header>
+    <>
+      <Header
+        tier={tier?.tier ?? null}
+        generated={generated}
+        stale={snap !== null && snap.missing !== true && isStale(generated)}
+        paused={snap?.paused === true}
+      />
+      <main className="mx-auto max-w-5xl px-4 py-6">
+        {tier && <TierBanner result={tier} openPrs={prs.length} />}
 
-      {loadError && (
-        <p
-          className="mt-4 rounded border border-red-600 p-2 text-sm text-red-700 dark:text-red-400"
-          role="alert"
-        >
-          Could not load state: {loadError}
-        </p>
-      )}
-      {notices.length > 0 && (
-        <ul className="mt-4 text-sm text-green-700 dark:text-green-400" role="status">
-          {notices.map((n) => (
-            <li key={n.id}>{n.text}</li>
-          ))}
-        </ul>
-      )}
+        {loadError && (
+          <p className="mt-4 rounded-lg border border-bad p-2 text-sm text-bad" role="alert">
+            Could not load state: {loadError}
+          </p>
+        )}
+        {notices.length > 0 && (
+          <ul className="mt-4 text-sm text-ok" role="status">
+            {notices.map((n) => (
+              <li key={n.id}>{n.text}</li>
+            ))}
+          </ul>
+        )}
 
-      {snap === null ? (
-        !loadError && <p className="mt-8 text-neutral-500">Loading…</p>
-      ) : snap.missing ? (
-        <p className="mt-8 text-neutral-500">No snapshot yet.</p>
-      ) : (
-        <>
-          {(snap.uninstalled ?? []).length > 0 && (
-            <p className="mt-4 text-sm text-neutral-500">
-              Waiting for the GitHub App: {(snap.uninstalled ?? []).join(', ')}
-            </p>
-          )}
-          <Questions
-            rows={snap.questions ?? []}
-            level={snap.nudge?.questions ?? 'ok'}
-            onSend={onSend}
-            onNotBau={onNotBau}
-          />
-          <Section title="Awaiting review">
-            <PrTable rows={prs} onAbandon={onAbandon} />
-          </Section>
-          <Section title="To deploy">
-            <DeployList rows={snap.deploy_pending ?? []} />
-          </Section>
-          <Section title="Last run">
-            <LastRun run={snap.last_run} pace={snap.pace} paused={snap.paused === true} />
-          </Section>
-        </>
-      )}
-    </main>
+        {snap === null ? (
+          !loadError && <p className="mt-8 text-dim">Loading…</p>
+        ) : snap.missing === true ? (
+          <p className="mt-8 text-dim">No snapshot yet.</p>
+        ) : (
+          <>
+            {(snap.uninstalled ?? []).length > 0 && (
+              <p className="mt-4 text-sm text-dim">
+                Waiting for the GitHub App: {(snap.uninstalled ?? []).join(', ')}
+              </p>
+            )}
+            <Questions
+              rows={snap.questions ?? []}
+              level={snap.nudge?.questions ?? 'ok'}
+              onSend={onSend}
+              onNotBau={onNotBau}
+            />
+            <Section title="Awaiting review">
+              <PrTable rows={prs} onAbandon={onAbandon} />
+            </Section>
+            <Section title="To deploy">
+              <DeployList rows={snap.deploy_pending ?? []} />
+            </Section>
+            <Section title="Last run">
+              <LastRun run={snap.last_run} pace={snap.pace} paused={snap.paused === true} />
+            </Section>
+          </>
+        )}
+      </main>
+      <Footer />
+    </>
   );
 }

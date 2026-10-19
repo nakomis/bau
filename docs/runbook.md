@@ -126,6 +126,25 @@ The job stays unloaded until `./install.sh` or `launchctl bootstrap gui/$(id -u)
 
 `bau serve` runs under launchd as `com.nakomis.bau-api` on port 8800, behind Leia (which adds mTLS and the proxy token). It serves `/state.json`, the built dashboard from `web/dist`, and `POST /abandon/{ref}`.
 
+The dashboard is a single page at `https://bau.home.nakomis.com/` (mTLS, Nakomis Home CA client certificate). It shows an overall tier, open PRs grouped by repository (each linking to GitHub and Plane), the last run, what is waiting to deploy, and the snapshot's age. The tier mirrors BD-1's BAU row (`mac/conversation-memory-forwarder/src/status.rs` in home-servers; the same rules live in `web/src/lib/tier.ts` and must change together):
+
+| Tier | When |
+|------|------|
+| red | `state.json` cannot be loaded; snapshot older than 26 h, more than 5 minutes in the future, or with no usable `generated_at`; last run stopped with `failed*`, `preflight*` or `rejected`; 30 or more open PRs |
+| amber | no snapshot yet; usage telemetry missing; 10 or more open PRs |
+| green | otherwise |
+
+"Failed runs" means the last run only: the snapshot carries `last_run`, not a history.
+
+**Not wired yet (waits on Cere's LAN address, HOME-445).** Until Leia's `cere_lan_ip` is set, Leia's vhost answers every request with `503 "BAU is not provisioned yet"` (served as `text/plain`) and never reaches this API; BD-1 hides its BAU row on exactly that answer. Wiring Cere is a separate change in home-servers (`leia/ansible/playbook.yml`, `cere_lan_ip`, then the nginx tag).
+
+When Cere is wired, verify:
+
+1. `launchctl list | grep com.nakomis.bau-api` shows the job, and `ls ~/bau/src/web/dist/index.html` exists (the API serves that directory at `/`).
+2. On Cere: `curl -s localhost:8800/state.json | head -c 200` returns JSON, and `curl -sI localhost:8800/` shows `200`, `text/html`, `cache-control: no-cache` and a `content-security-policy` header.
+3. Via Leia, with the client certificate: `/` returns the page (not the 503 text) and `/state.json` returns JSON.
+4. In Chrome, the dashboard renders, the tier matches BD-1's BAU row, and the PR links open the right GitHub pull requests.
+
 - The `proxy-token` keychain item (see "Keychain items") must exist before the API job is installed. If it is missing, `install.sh` skips `com.nakomis.bau-api` with a loud message and installs the other jobs; add the item and re-run `./install.sh`.
 - Abandon from the shell: `bau abandon REF [--note "why"]`. It restores the item's previous state first, then closes the PR, deletes the checkout, removes the `BAU` label and posts a `[bau:abandoned]` comment.
 - Abandon takes the same lock as `bau run`. While a night is running it answers 409 ("another BAU operation is in progress; try again shortly"); try again after about 05:30.

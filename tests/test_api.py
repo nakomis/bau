@@ -50,6 +50,29 @@ def test_index_served(cfg, tmp_path):
     assert r.status_code == 200 and "bau" in r.text
 
 
+def test_security_headers_on_page_and_api(cfg, tmp_path):
+    c = client(cfg, tmp_path)
+    for path in ("/", "/state.json"):
+        h = c.get(path).headers
+        assert "default-src 'self'" in h["content-security-policy"]
+        assert "frame-ancestors 'none'" in h["content-security-policy"]
+        assert h["x-content-type-options"] == "nosniff"
+        assert h["referrer-policy"] == "no-referrer"
+
+
+def test_index_is_revalidated_but_assets_are_not_forced_to(cfg, tmp_path):
+    (tmp_path / "web" / "assets").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "web" / "assets" / "app-abc.js").write_text("x")
+    c = client(cfg, tmp_path)
+    assert c.get("/").headers["cache-control"] == "no-cache"
+    assert c.get("/index.html").headers["cache-control"] == "no-cache"
+    assert c.get("/assets/app-abc.js").headers.get("cache-control") != "no-cache"
+
+
+def test_state_stays_uncached(cfg, tmp_path):
+    assert client(cfg, tmp_path).get("/state.json").headers["cache-control"] == "no-store"
+
+
 def test_missing_static_dir_serves_api_only(cfg, tmp_path):
     c = client(cfg, tmp_path, static=tmp_path / "nope")
     assert c.get("/state.json").status_code == 200

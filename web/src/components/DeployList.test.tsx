@@ -7,7 +7,7 @@ const mk = (repo: string, ref: string): DeployRow => ({
   repo,
   ref,
   title: `Title ${ref}`,
-  pr_url: `https://gh/${ref}`,
+  pr_url: `https://github.com/nakomis/home-infra/pull/${ref}`,
   merged_at: '2026-10-14',
   action: `deploy ${repo}`,
 });
@@ -22,7 +22,10 @@ describe('DeployList', () => {
     expect(screen.getAllByRole('heading', { level: 3 })).toHaveLength(2);
     expect(screen.getAllByText('deploy nakomis/a')).toHaveLength(1);
     expect(screen.getByText(/A-2: Title A-2/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /B-1/ })).toHaveAttribute('href', 'https://gh/B-1');
+    expect(screen.getByRole('link', { name: /B-1/ })).toHaveAttribute(
+      'href',
+      'https://github.com/nakomis/home-infra/pull/B-1',
+    );
   });
   it('renders unsafe URLs as text and opens good ones safely', () => {
     const { unmount } = render(
