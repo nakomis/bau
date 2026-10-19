@@ -109,9 +109,7 @@ function Card({
       {open && (
         // Focus inside the open body pins the card open (not on the header, which toggles).
         <fieldset className="min-w-0" aria-label={`Questions for ${row.ref}`} onFocus={onEngage}>
-          <p className="mt-2 text-sm text-dim italic">
-            {row.summary}
-          </p>
+          <p className="mt-2 text-sm text-dim italic">{row.summary}</p>
           {row.questions.map((q, i) => {
             const d = draft[q.id] ?? { accepted: false, text: '' };
             return (
@@ -130,9 +128,7 @@ function Card({
                     type="button"
                     aria-pressed={d.accepted}
                     className={`rounded border px-3 py-1 text-sm ${
-                      d.accepted
-                        ? 'border-ok bg-ok text-white'
-                        : 'border-line'
+                      d.accepted ? 'border-ok bg-ok text-white' : 'border-line'
                     }`}
                     onClick={() => onDraft(q.id, { accepted: true, text: '' })}
                   >
