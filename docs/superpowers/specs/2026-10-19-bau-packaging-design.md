@@ -225,7 +225,7 @@ expands `~`), so no absolute `/Users/nakomis` remains in anything shipped.
 The plist templates (`@BAU_HOME@`, `@HOME@`) are in the bundle, versioned with
 the code, so schedule changes roll back with it. Ansible renders them
 (a plain `replace`, not logic) into `~/Library/LaunchAgents`. Log paths move
-to `~/Library/Logs/BAU`. `old bau-sweep` clean-up that `install.sh` does is
+to `~/Library/Logs/BAU`. The old `bau-sweep` clean-up that `install.sh` does is
 carried by the play's migration step (section 5).
 
 ## 5. Migration from the checkout install
