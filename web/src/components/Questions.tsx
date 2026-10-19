@@ -40,8 +40,8 @@ function saveDrafts(drafts: Drafts) {
 }
 
 const badge: Record<'warn' | 'down', string> = {
-  warn: 'bg-amber-500 text-black',
-  down: 'bg-red-600 text-white',
+  warn: 'bg-warn/20 text-warn',
+  down: 'bg-bad/15 text-bad',
 };
 
 function Card({
@@ -84,7 +84,7 @@ function Card({
   };
 
   return (
-    <div className="mb-3 rounded border border-neutral-200 p-3 dark:border-neutral-800">
+    <div className="mb-3 rounded-[14px] border border-line bg-card p-4">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <button
           type="button"
@@ -94,14 +94,14 @@ function Card({
         >
           {row.ref}: {row.title}
         </button>
-        <span className="text-xs text-neutral-500">
+        <span className="text-xs text-dim">
           {row.repo.replace('nakomis/', '')} · {ageLabel(row.age_days)}
         </span>
         <span className="ml-auto flex gap-3 text-sm">
-          <ExtLink className="text-neutral-500 underline" href={row.plane_url}>
+          <ExtLink className="text-dim underline" href={row.plane_url}>
             Plane ↗
           </ExtLink>
-          <ExtLink className="text-neutral-500 underline" href={row.repo_url}>
+          <ExtLink className="text-dim underline" href={row.repo_url}>
             Repo ↗
           </ExtLink>
         </span>
@@ -109,7 +109,7 @@ function Card({
       {open && (
         // Focus inside the open body pins the card open (not on the header, which toggles).
         <fieldset className="min-w-0" aria-label={`Questions for ${row.ref}`} onFocus={onEngage}>
-          <p className="mt-2 text-sm text-neutral-600 italic dark:text-neutral-400">
+          <p className="mt-2 text-sm text-dim italic">
             {row.summary}
           </p>
           {row.questions.map((q, i) => {
@@ -119,11 +119,11 @@ function Card({
                 <p>
                   <b>{i + 1}.</b> {q.text}
                 </p>
-                <div className="mt-1 rounded bg-sky-50 p-2 text-sm dark:bg-sky-950">
+                <div className="mt-1 rounded-lg bg-accent/15 p-2 text-sm">
                   <div>
                     <b>Recommended:</b> {q.recommendation}
                   </div>
-                  <div className="text-neutral-600 dark:text-neutral-400">Why: {q.why}</div>
+                  <div className="text-dim">Why: {q.why}</div>
                 </div>
                 <div className="mt-2 flex flex-wrap items-start gap-2">
                   <button
@@ -131,15 +131,15 @@ function Card({
                     aria-pressed={d.accepted}
                     className={`rounded border px-3 py-1 text-sm ${
                       d.accepted
-                        ? 'border-green-700 bg-green-700 text-white'
-                        : 'border-neutral-300 dark:border-neutral-700'
+                        ? 'border-ok bg-ok text-white'
+                        : 'border-line'
                     }`}
                     onClick={() => onDraft(q.id, { accepted: true, text: '' })}
                   >
                     Accept
                   </button>
                   <textarea
-                    className="min-w-0 flex-1 rounded border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-900 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                    className="min-w-0 flex-1 rounded-lg border border-line bg-ground px-2 py-1 text-sm text-fg"
                     rows={2}
                     maxLength={MAX_ANSWER}
                     placeholder="…or write your own"
@@ -152,12 +152,12 @@ function Card({
             );
           })}
           <div className="mt-3 flex flex-col items-end gap-1">
-            {error && <span className="text-red-700 dark:text-red-400">{error}</span>}
+            {error && <span className="text-bad">{error}</span>}
             <div className="flex gap-2">
               <button
                 type="button"
                 disabled={!complete || busy}
-                className="rounded bg-neutral-900 px-3 py-1 text-sm text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
+                className="rounded-lg bg-accent px-3 py-1 text-sm text-white disabled:opacity-50"
                 onClick={() => run(onSend)}
               >
                 Send to BAU
@@ -165,7 +165,7 @@ function Card({
               <button
                 type="button"
                 disabled={busy}
-                className="rounded border border-neutral-300 px-3 py-1 text-sm text-neutral-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-400"
+                className="rounded-lg border border-line px-3 py-1 text-sm text-dim disabled:opacity-50"
                 onClick={() => run(onNotBau)}
               >
                 Not BAU

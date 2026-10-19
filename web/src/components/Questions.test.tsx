@@ -7,7 +7,7 @@ const mk = (ref: string, age: number, extra: Partial<QuestionRow> = {}): Questio
   repo: 'nakomis/home-infra',
   ref,
   title: `Title ${ref}`,
-  plane_url: `https://plane/${ref}`,
+  plane_url: `https://plane.home.nakomis.com/nakomis/browse/${ref}/`,
   repo_url: 'https://github.com/nakomis/home-infra',
   asked_at: '2026-10-14T01:00:00Z',
   age_days: age,
@@ -45,7 +45,7 @@ describe('Questions', () => {
     expect(screen.getByText(/Why1 HOME-1/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Plane/ })).toHaveAttribute(
       'href',
-      'https://plane/HOME-1',
+      'https://plane.home.nakomis.com/nakomis/browse/HOME-1/',
     );
     expect(screen.getByRole('link', { name: /Repo/ })).toHaveAttribute(
       'href',
