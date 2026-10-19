@@ -18,8 +18,9 @@ from bau.abandon import (
     UnknownProject,
     abandon,
 )
+from bau.atc import AtcClient, AtcState, AtcUnavailable, load_atc_state
 from bau.checkout import Repos
-from bau.config import Config, KeychainRef, load_config, load_projects, paused_reader
+from bau.config import Config, KeychainRef, load_config, paused_reader
 from bau.github import GitHubApp, GitHubClient
 from bau.lock import run_lock
 from bau.markers import latest_asked
@@ -91,8 +92,21 @@ class ClientFactory:
         return client
 
 
+ATC_STOP = "preflight: atc"
+
+
 def wire(cfg: Config, config_dir: Path):
-    projects = load_projects(config_dir / "projects.yaml")
+    """Build the clients. Projects and priority come from ATC (or its cache on Cere); raises
+    AtcUnavailable when neither can be read, before any other service is touched."""
+    atc_state = load_atc_state(
+        AtcClient(cfg.atc.url, cfg.plane.client_cert, cfg.plane.client_key), cfg.paths.atc_cache
+    )
+    return wire_services(cfg, atc_state)
+
+
+def wire_services(cfg: Config, atc_state: AtcState):
+    """The clients around an ATC state already in hand (wire()'s second half)."""
+    projects = atc_state.projects
     plane = PlaneClient(
         cfg.plane.url,
         cfg.plane.workspace,
@@ -110,7 +124,7 @@ def wire(cfg: Config, config_dir: Path):
 
     factory = ClientFactory(app, clock)
     repos = Repos(cfg.paths.repos, cfg.paths.work)
-    return projects, plane, app, factory, repos, clock
+    return projects, plane, app, factory, repos, clock, atc_state
 
 
 def _kept_questions(previous: list[dict], ident: str) -> list[QuestionRow]:
@@ -236,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _night(args: argparse.Namespace, cfg: Config, wired, paused: Callable[[], bool]) -> Night:
-    projects, plane, app, factory, repos, clock = wired
+    projects, plane, app, factory, repos, clock, atc_state = wired
     return Night(
         cfg,
         projects,
@@ -249,6 +263,8 @@ def _night(args: argparse.Namespace, cfg: Config, wired, paused: Callable[[], bo
         oauth_token=read_secret(cfg.claude.oauth_token),
         dry_run=getattr(args, "dry_run", False),
         paused=paused,
+        priority=atc_state.priority,
+        atc=atc_label(atc_state),
     )
 
 
@@ -262,7 +278,8 @@ def _write_run_snapshot(
     *,
     failed: bool,
 ) -> None:
-    projects, plane, _, factory, _, clock = wired
+    projects, plane, _, factory, _, clock, atc_state = wired
+    fetched_at, age = _stale_age(atc_state, clock())
     last = LastRun(
         started.isoformat(),
         clock().isoformat(),
@@ -276,6 +293,9 @@ def _write_run_snapshot(
         report.labelled_not_bau,
         report.triaged,
         report.asked,
+        report.atc,
+        fetched_at,
+        age,
     )
     previous = read_snapshot(cfg.paths.snapshot) or {}
     open_rows, deploy_rows, question_rows = (
@@ -304,10 +324,39 @@ def _write_run_snapshot(
     write_snapshot(cfg.paths.snapshot, data)
 
 
+def atc_label(state: AtcState) -> str:
+    return "stale" if state.stale else "empty" if state.empty else "ok"
+
+
+def _stale_age(state: AtcState, now: datetime) -> tuple[str, float | None]:
+    """When the night ran on the cache: when it was fetched and its age in hours (one decimal)."""
+    if not state.stale or not state.fetched_at:
+        return "", None
+    try:
+        fetched = datetime.fromisoformat(state.fetched_at)
+    except ValueError:
+        return state.fetched_at, None
+    return state.fetched_at, round((now - fetched).total_seconds() / 3600, 1)
+
+
+def _unwired(cfg: Config):
+    """Stands in for wire() when ATC and its cache are both unreadable: a clock and nothing else,
+    enough for a failure snapshot that touches no service."""
+    tz = ZoneInfo(cfg.schedule.timezone)
+    return {}, None, None, None, None, lambda: datetime.now(tz), AtcState({}, {}, True)
+
+
 def _run(args: argparse.Namespace, cfg: Config) -> int:
-    wired = wire(cfg, args.config)
-    clock = wired[5]
     paused = paused_reader(args.config / "bau.yaml", cfg.paused, cfg.paths.pause_file)
+    try:
+        wired = wire(cfg, args.config)
+    except AtcUnavailable as e:
+        print(f"bau run: {ATC_STOP}: {e} (and no cached copy)")
+        if not args.dry_run:
+            unwired = _unwired(cfg)
+            _write_run_snapshot(cfg, unwired, unwired[5](), NightReport(), ATC_STOP, paused(), failed=True)
+        return exit_code(ATC_STOP)
+    clock = wired[5]
     night = _night(args, cfg, wired, paused)
     started = clock()
     try:
@@ -335,7 +384,10 @@ def _locked_out(cfg: Config, args: argparse.Namespace) -> int:
     print("bau run: another BAU operation held the lock for an hour; giving up")
     if args.dry_run:
         return 0
-    wired = wire(cfg, args.config)
+    try:
+        wired = wire(cfg, args.config)
+    except AtcUnavailable:
+        wired = _unwired(cfg)
     clock = wired[5]
     paused = paused_reader(args.config / "bau.yaml", cfg.paused, cfg.paths.pause_file)
     # failed=True keeps the last known rows and touches no service: nothing ran tonight.
@@ -350,8 +402,20 @@ def _dispatch(args: argparse.Namespace) -> int:
             if not held:
                 return _locked_out(cfg, args)
             return _run(args, cfg)
-    wired = wire(cfg, args.config)
-    projects, plane, app, factory, repos, clock = wired
+    try:
+        wired = wire(cfg, args.config)
+    except AtcUnavailable as e:
+        if args.command != "serve":
+            print(f"bau {args.command}: {ATC_STOP}: {e} (and no cached copy); nothing done", file=sys.stderr)
+            return exit_code(ATC_STOP)
+        # The dashboard still serves the snapshot; writes that need a project refuse until a
+        # restart after ATC (or its cache) is back. launchd's KeepAlive would otherwise respawn it.
+        print(
+            f"bau serve: {ATC_STOP}: {e} (and no cached copy); serving with no projects",
+            file=sys.stderr,
+        )
+        wired = wire_services(cfg, AtcState({}, {}, True))
+    projects, plane, app, factory, repos, clock, _ = wired
     if args.command == "probe":
         paused = paused_reader(args.config / "bau.yaml", cfg.paused, cfg.paths.pause_file)
         print(_night(args, cfg, wired, paused).probe())
@@ -392,7 +456,7 @@ def _dispatch(args: argparse.Namespace) -> int:
 
 
 def _abandon(args: argparse.Namespace, cfg: Config, wired) -> int:
-    projects, plane, _, factory, repos, _ = wired
+    projects, plane, _, factory, repos, _, _ = wired
     try:
         r = abandon(
             args.ref,

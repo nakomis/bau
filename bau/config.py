@@ -84,6 +84,11 @@ class PlaneConfig:
 
 
 @dataclass(frozen=True)
+class AtcConfig:
+    url: str
+
+
+@dataclass(frozen=True)
 class ClaudeConfig:
     oauth_token: KeychainRef
 
@@ -95,6 +100,7 @@ class Paths:
     logs: Path
     snapshot: Path
     pause_file: Path
+    atc_cache: Path
 
 
 @dataclass(frozen=True)
@@ -117,6 +123,7 @@ class Config:
     paths: Paths
     container: Container
     nudge: Nudge
+    atc: AtcConfig
 
 
 @dataclass(frozen=True)
@@ -167,6 +174,7 @@ def load_config(path: Path) -> Config:
         paths=Paths(**{k: Path(v).expanduser() for k, v in raw["paths"].items()}),
         container=Container(**raw["container"]),
         nudge=Nudge(**raw["nudge"]),
+        atc=AtcConfig(url=raw["atc"]["url"].rstrip("/")),
     )
 
 

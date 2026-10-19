@@ -64,11 +64,11 @@ def verdicts(*rows):
     return SessionResult("done", "", rl(), 0.2, f"```json\n{body}\n```")
 
 
-def make_night(cfg, plane, runner, dry_run=False, paused=lambda: False, hour=2):
+def make_night(cfg, plane, runner, dry_run=False, paused=lambda: False, hour=2, projects=None, priority=None):
     clock = lambda: NOW.replace(hour=hour)  # noqa: E731
     n = Night(
         cfg,
-        PROJECTS,
+        PROJECTS if projects is None else projects,
         plane,
         None,
         None,
@@ -79,6 +79,7 @@ def make_night(cfg, plane, runner, dry_run=False, paused=lambda: False, hour=2):
         oauth_token="oat",
         log=lambda *_: None,
         paused=paused,
+        **({"priority": priority} if priority is not None else {}),
     )
     n.report.latest = rl()
     return n
@@ -326,3 +327,29 @@ def test_sweep_writes_nothing_past_the_cutoff(cfg, desc, ident):
     n = make_night(cfg, plane, FakeRunner([]), hour=5)
     sweep_pass(n)
     assert plane.calls == [] and n.report.stop_reason == "cutoff"
+
+
+# -- ATC order (ATC-7) ------------------------------------------------------------
+def test_sweep_visits_projects_in_board_order(cfg):
+    projects = {
+        "ZED": ProjectConfig("ZED", "nakomis/zed", False, ""),
+        "ALPHA": ProjectConfig("ALPHA", "nakomis/alpha", False, ""),
+    }
+    plane = FakePlane({"ALPHA": [item("ALPHA-1")], "ZED": [item("ZED-1")]})
+    n = make_night(cfg, plane, FakeRunner([]), dry_run=True, projects=projects)
+    sweep_pass(n)
+    assert n.report.planned == ["sweep ZED: 1 item(s)", "sweep ALPHA: 1 item(s)"]
+
+
+def test_sweep_runs_the_batch_holding_the_top_priority_item_first(cfg):
+    cfg = replace(cfg, limits=replace(cfg.limits, sweep_batch_items=2))
+    refs = [f"HOME-{i}" for i in range(1, 7)]
+    plane = FakePlane({"HOME": [item(r) for r in refs]})
+    runner = FakeRunner([verdicts(), verdicts(), verdicts()])
+    priority = {"HOME-5": 0, "HOME-2": 1, "HOME-6": 2, "HOME-1": 3, "HOME-3": 4, "HOME-4": 5}
+    n = make_night(cfg, plane, runner, priority=priority)
+    sweep_pass(n)
+    batches = [re.findall(r"<<<ITEM (HOME-\d+)", b[2]) for b in runner.briefs]
+    best = [min(priority[r] for r in b) for b in batches]
+    assert best == sorted(best) and best[0] == 0
+    assert sorted(r for b in batches for r in b) == sorted(refs)

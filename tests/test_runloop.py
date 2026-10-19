@@ -84,11 +84,13 @@ def night(
     paused=None,
     logs=None,
     projects=None,
+    priority=None,
+    atc=None,
 ):
     clock = lambda: datetime(2026, 10, 15, hour, minute, tzinfo=LONDON)  # noqa: E731
     n = Night(
         cfg,
-        projects or PROJECTS,
+        PROJECTS if projects is None else projects,
         plane,
         app or StubApp(),
         lambda repo: gh,
@@ -100,6 +102,8 @@ def night(
         log=(logs.append if logs is not None else lambda *_: None),
         sleep=lambda s: None,
         **({"paused": paused} if paused is not None else {}),
+        **({"priority": priority} if priority is not None else {}),
+        **({"atc": atc} if atc is not None else {}),
     )
     n.probe = lambda: probe if probe is not None else good_rl()
     return n
@@ -583,10 +587,10 @@ def test_repo_override_outside_projects_is_declined_before_any_github_call(cfg, 
     plane = TriagedPlane({"HOME": [item(desc="repo: nakomis/x\ndo it")]})
     gh = FakeGitHub(open_prs={REPO: []})
     report = night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path)).run()
-    assert report.declined[0]["reason"] == "repo override nakomis/x is not in projects.yaml"
+    assert report.declined[0]["reason"] == "repo override nakomis/x is not a BAU project in ATC"
     assert gh.calls == []
     assert any(
-        c[0] == "comment" and "repo override nakomis/x is not in projects.yaml" in c[1][1]
+        c[0] == "comment" and "repo override nakomis/x is not a BAU project in ATC" in c[1][1]
         for c in plane.calls
     )
 
@@ -1329,3 +1333,52 @@ def test_abandon_with_failed_unlabel_is_not_repicked_next_night(cfg, tmp_path):
     report = night(cfg, plane, gh, runner, repos).run()
     assert report.sessions == 0 and len(runner.briefs) == 1
     assert not any(c[0] in ("set_state", "comment") and c[1][0] == "HOME-42" for c in plane.calls)
+
+
+# -- ATC priority and staleness (ATC-7) -------------------------------------------
+def test_new_tickets_follow_atc_priority(cfg, tmp_path):
+    urgent = replace(item("HOME-1"), priority="urgent")
+    low = replace(item("HOME-2"), priority="low")
+    plane = TriagedPlane({"HOME": [urgent, low]})
+    gh = FakeGitHub(open_prs={REPO: []})
+    n = night(
+        cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path), dry_run=True, priority={"HOME-2": 0, "HOME-1": 1}
+    )
+    n.new_tickets_pass()
+    assert [p.split()[1] for p in n.report.planned] == ["HOME-2", "HOME-1"]
+
+
+def test_new_tickets_without_atc_priority_keep_the_old_order(cfg, tmp_path):
+    urgent = replace(item("HOME-1"), priority="urgent")
+    low = replace(item("HOME-2"), priority="low")
+    plane = TriagedPlane({"HOME": [low, urgent]})
+    n = night(cfg, plane, FakeGitHub(open_prs={REPO: []}), FakeRunner([]), FakeRepos(tmp_path), dry_run=True)
+    n.new_tickets_pass()
+    assert [p.split()[1] for p in n.report.planned] == ["HOME-1", "HOME-2"]
+
+
+def test_stale_atc_is_recorded(cfg, tmp_path):
+    plane = TriagedPlane({"HOME": []})
+    gh = FakeGitHub(open_prs={REPO: []})
+    assert night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path)).run().atc == "ok"
+    report = night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path), atc="stale").run()
+    assert report.atc == "stale"
+
+
+def test_a_repo_override_outside_atc_is_declined_with_the_new_wording(cfg, tmp_path):
+    plane = TriagedPlane({"HOME": [item(desc="repo: nakomis/x\ndo it")]})
+    gh = FakeGitHub(open_prs={REPO: []})
+    report = night(cfg, plane, gh, FakeRunner([]), FakeRepos(tmp_path)).run()
+    assert "not in projects.yaml" not in report.declined[0]["reason"]
+
+
+def test_preflight_with_no_atc_projects_ends_quietly(cfg, tmp_path):
+    report = night(cfg, FakePlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path), projects={}).run()
+    assert report.stop_reason == "ok" and report.sessions == 0
+
+
+def test_empty_atc_night_is_recorded(cfg, tmp_path):
+    report = night(
+        cfg, FakePlane({}), FakeGitHub(), FakeRunner([]), FakeRepos(tmp_path), projects={}, atc="empty"
+    ).run()
+    assert report.atc == "empty" and report.sessions == 0

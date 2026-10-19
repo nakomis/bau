@@ -178,7 +178,7 @@ def sweep_pass(night: Night) -> None:
     from bau.runloop import repo_for
 
     limits = night.cfg.limits
-    for ident in sorted(night.projects):
+    for ident in night.projects:  # board order, from ATC
         items = _sweepable_items(night, ident)
         if not items:
             continue
@@ -201,10 +201,14 @@ def sweep_pass(night: Night) -> None:
         # hold back the same neighbours night after night.
         random.Random(f"{night.clock():%Y-%m-%d} {ident}").shuffle(asked)
         size = limits.sweep_batch_items
-        for batch, start in enumerate(range(0, len(asked), size), 1):
+        batches = [asked[start : start + size] for start in range(0, len(asked), size)]
+        # Then run the batches best first: the one holding the highest-priority item goes first.
+        lowest = len(night.priority)
+        batches.sort(key=lambda b: min(night.priority.get(it.ref, lowest) for it in b))
+        for batch, items_in_batch in enumerate(batches, 1):
             if not night.may_start():
                 return
-            brief, refs = build_sweep_brief(ident, asked[start : start + size])
+            brief, refs = build_sweep_brief(ident, items_in_batch)
             night.cfg.paths.work.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix="sweep-", dir=night.cfg.paths.work) as empty:
                 result = night.agent_session(
