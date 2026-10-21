@@ -42,6 +42,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: bau-v${{ inputs.version }}
+          persist-credentials: false
       - name: version.json
         env:
           VERSION: ${{ inputs.version }}
@@ -56,4 +57,7 @@ jobs:
           project: bau
           environment: prod
           version-file: ${{ runner.temp }}/version.json
-      - run: echo "::notice::BAU ${{ inputs.version }} installed on ${{ inputs.host }}"
+      - env:
+          VERSION: ${{ inputs.version }}
+          HOST: ${{ inputs.host }}
+        run: echo "::notice::BAU $VERSION installed on $HOST"

@@ -28,14 +28,48 @@ def test_release_publishes_only_from_main_and_in_order():
     jobs = load("ci.yml")["jobs"]
     assert set(jobs["images"]["needs"]) == {"version"}
     assert {"version", "images", "web"} <= set(jobs["release"]["needs"])
-    for job in ("images", "release"):
-        # The gate is a job-level PUBLISH flag that only a push to main turns on,
-        # and every publishing step tests that flag.
-        assert MAIN_ONLY in str(jobs[job]["env"]["PUBLISH"])
-        publish_steps = [s for s in jobs[job]["steps"] if is_publish_step(s)]
-        assert publish_steps, job
-        for step in publish_steps:
-            assert "env.PUBLISH == 'true'" in str(step.get("if", "")), (job, step)
+    assert {"version", "release"} <= set(jobs["publish"]["needs"])
+    # images: a job-level PUBLISH flag that only a push to main turns on, and
+    # every publishing step tests it.
+    assert MAIN_ONLY in str(jobs["images"]["env"]["PUBLISH"])
+    publish_steps = [s for s in jobs["images"]["steps"] if is_publish_step(s)]
+    assert publish_steps
+    for step in publish_steps:
+        assert "env.PUBLISH == 'true'" in str(step.get("if", "")), step
+    # release runs PR code: no publishing step, no write or OIDC permission.
+    assert not [s for s in jobs["release"]["steps"] if is_publish_step(s)]
+    assert jobs["release"]["permissions"] == {"contents": "read"}
+    # publish is gated as a whole, and is the only job with write access.
+    assert jobs["publish"]["if"] == MAIN_ONLY
+    assert jobs["publish"]["permissions"]["contents"] == "write"
+    assert jobs["publish"]["permissions"]["id-token"] == "write"
+    # (`version` holds id-token for compute-version but runs no PR-authored code.)
+    for name in ("python", "web", "images", "release"):
+        perms = jobs[name].get("permissions", {})
+        assert "write" not in perms.values(), name
+
+
+def test_publish_records_the_deployment_after_the_release():
+    steps = load("ci.yml")["jobs"]["publish"]["steps"]
+    create = next(i for i, s in enumerate(steps) if "gh release create" in s.get("run", ""))
+    record = next(i for i, s in enumerate(steps) if "record-deployment" in s.get("uses", ""))
+    assert create < record
+
+
+def test_checkouts_do_not_persist_credentials():
+    for name in ("ci.yml", "bau-installed.yml"):
+        for job in load(name)["jobs"].values():
+            for step in job["steps"]:
+                if "actions/checkout" in step.get("uses", ""):
+                    assert step["with"]["persist-credentials"] is False
+
+
+def test_workflow_inputs_are_not_interpolated_into_scripts():
+    for name in ("ci.yml", "bau-installed.yml"):
+        for job in load(name)["jobs"].values():
+            for step in job["steps"]:
+                assert "${{ inputs." not in step.get("run", "")
+                assert "github.event.pull_request.body" not in step.get("run", "")
 
 
 def test_images_are_arm64_only_and_never_latest():
@@ -48,12 +82,13 @@ def test_images_are_arm64_only_and_never_latest():
     assert names == {"bau-agent", "bau-egress"}
 
 
-def test_bundle_smoke_runs_before_publishing():
-    steps = load("ci.yml")["jobs"]["release"]["steps"]
+def test_bundle_smoke_runs_before_the_bundle_is_uploaded():
+    jobs = load("ci.yml")["jobs"]
+    steps = jobs["release"]["steps"]
     names = [s.get("name", "") for s in steps]
-    assert names.index("bundle-smoke") < next(
-        i for i, s in enumerate(steps) if "gh release create" in s.get("run", "")
-    )
+    upload = next(i for i, s in enumerate(steps) if "upload-artifact" in s.get("uses", ""))
+    assert names.index("bundle-smoke") < upload
+    assert "release" in jobs["publish"]["needs"]
 
 
 def test_secrets_only_in_the_release_environment():
