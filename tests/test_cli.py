@@ -678,3 +678,23 @@ def test_every_lock_user_agrees(tmp_path, monkeypatch):
     app = api.create_app(cfg, {}, None, None, None, tmp_path, "t")
     TestClient(app).post("/abandon/X-1", headers={"X-Bau-Proxy-Token": "t"})
     assert seen["api"] == lock
+
+
+def test_serve_serves_the_packaged_dashboard(run_world, monkeypatch, tmp_path):
+    import bau.api
+
+    served = {}
+    dist = tmp_path / "dist"
+    monkeypatch.setattr(run_world.cli, "wire", lambda c, d: (_ for _ in ()).throw(AtcUnavailable("no route")))
+    monkeypatch.setattr(
+        run_world.cli,
+        "wire_services",
+        lambda cfg, state: (state.projects, "plane", "app", "factory", "repos", lambda: NOW, state),
+    )
+    monkeypatch.setattr(bau.api, "static_dir", lambda: dist)
+    monkeypatch.setattr(
+        bau.api, "create_app", lambda cfg, projects, plane, factory, repos, static, token: static
+    )
+    monkeypatch.setattr(bau.api, "serve", lambda app, port: served.setdefault("static", app))
+    assert run_world.cli.main(["serve", "--config", str(run_world.config_dir)]) == 0
+    assert served["static"] == dist

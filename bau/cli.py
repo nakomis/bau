@@ -454,11 +454,10 @@ def _dispatch(args: argparse.Namespace) -> int:
         )
         return 0
     if args.command == "serve":
-        from bau.api import create_app, serve
+        from bau.api import create_app, serve, static_dir
 
-        static_dir = Path(args.config).parent / "web" / "dist"
         token = read_secret(KeychainRef("bau", "proxy-token"))
-        serve(create_app(cfg, projects, plane, factory, repos, static_dir, token), args.port)
+        serve(create_app(cfg, projects, plane, factory, repos, static_dir(), token), args.port)
         return 0
     if args.command == "abandon":
         return _abandon(args, cfg, wired)

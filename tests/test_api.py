@@ -3,7 +3,9 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from bau.api import create_app
+import bau
+import bau.version
+from bau.api import create_app, static_dir
 from bau.config import ProjectConfig
 from bau.lock import run_lock
 from tests.fakes.clients import FakeGitHub, FakePlane, FakeRepos
@@ -27,7 +29,8 @@ def client(cfg, tmp_path, plane=None, static="make"):
 
 def test_state_missing_is_reported_not_500(cfg, tmp_path):
     r = client(cfg, tmp_path).get("/state.json")
-    assert r.status_code == 200 and r.json() == {"schema": 1, "missing": True}
+    body = r.json()
+    assert r.status_code == 200 and body.pop("version") and body == {"schema": 1, "missing": True}
 
 
 def test_state_served_from_file(cfg, tmp_path):
@@ -249,3 +252,26 @@ def test_answers_unexpected_error_is_500_without_detail(cfg, tmp_path):
     for r in responses:
         assert r.status_code == 500 and r.json() == {"error": "internal error"}
         assert "secret" not in r.text
+
+
+def test_static_dir_prefers_the_packaged_copy(tmp_path, monkeypatch):
+    monkeypatch.setattr(bau, "__file__", str(tmp_path / "bau" / "__init__.py"))
+    assert static_dir() is None
+    checkout = tmp_path / "web" / "dist"
+    checkout.mkdir(parents=True)
+    assert static_dir() == checkout
+    packaged = tmp_path / "bau" / "web_dist"
+    packaged.mkdir(parents=True)
+    assert static_dir() == packaged
+
+
+def test_state_json_carries_the_version(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(bau.version, "VERSION", "0.4.2")
+    monkeypatch.setattr(bau.version, "GIT_SHA", "abc1234")
+    c = client(cfg, tmp_path)
+    expected = {"version": "0.4.2", "sha": "abc1234"}
+    assert c.get("/state.json").json()["version"] == expected
+    cfg.paths.snapshot.parent.mkdir(parents=True, exist_ok=True)
+    cfg.paths.snapshot.write_text(json.dumps({"schema": 1, "open_prs": []}))
+    assert c.get("/state.json").json()["version"] == expected
+    assert "version" not in json.loads(cfg.paths.snapshot.read_text())

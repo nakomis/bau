@@ -147,7 +147,7 @@ export default function App() {
           </>
         )}
       </main>
-      <Footer />
+      <Footer version={snap?.version} />
     </>
   );
 }
