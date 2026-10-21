@@ -113,7 +113,7 @@ def create_app(
                 worker_login=cfg.identities.worker_github_login,
                 worker_email=cfg.identities.worker_plane_email,
                 note=body.note if body else "",
-                lock_path=cfg.paths.logs.parent / "run.lock",
+                lock_path=cfg.paths.lock,
             )
         except InvalidRef:
             return JSONResponse({"error": "invalid ref"}, status_code=400)
@@ -132,7 +132,7 @@ def create_app(
             log.warning("snapshot update after abandon %s failed: %s", ref, type(e).__name__)
         return {"ref": r.ref, "pr": r.pr, "restored_state": r.restored_state}
 
-    lock_path = cfg.paths.logs.parent / "run.lock"
+    lock_path = cfg.paths.lock
 
     def question_write(ref: str, what: str, action: Callable[[], None]):
         try:

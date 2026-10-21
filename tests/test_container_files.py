@@ -64,7 +64,7 @@ def test_bau_net_is_internal_and_only_proxy_bridges():
 
 def test_compose_network_name_matches_config():
     compose = yaml.safe_load((ROOT / "container" / "compose.yml").read_text())
-    expected = load_config(ROOT / "config" / "bau.yaml").container.network
+    expected = load_config(ROOT / "config").container.network
     assert compose["networks"]["bau-net"]["name"] == expected
 
 

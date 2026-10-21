@@ -130,7 +130,7 @@ class Night:
         self.cfg, self.projects, self.plane, self.gh_app = cfg, projects, plane, gh_app
         self.github_factory, self.repos, self.runner, self.clock = github_factory, repos, runner, clock
         self.oauth_token, self.dry_run, self.log, self.sleep = oauth_token, dry_run, log, sleep
-        self.paused = paused or (lambda: cfg.paused)
+        self.paused = paused or (lambda: False)
         self.policy = Policy(cfg.limits, cfg.schedule, clock)
         self.report = NightReport(atc=atc)
         # ATC's priority order (ref -> position); empty falls back to Plane priority, then age.

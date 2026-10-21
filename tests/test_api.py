@@ -1,26 +1,17 @@
 import json
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from bau.api import create_app
-from bau.config import ProjectConfig, load_config
+from bau.config import ProjectConfig
 from bau.lock import run_lock
 from tests.fakes.clients import FakeGitHub, FakePlane, FakeRepos
 from tests.test_abandon import item, picked
-from tests.test_config import MINIMAL
 
 PROJECTS = {"HOME": ProjectConfig("HOME", "nakomis/home-infra", True, "")}
 TOKEN = "s3cret-token"
 AUTH = {"X-Bau-Proxy-Token": TOKEN}
-
-
-@pytest.fixture
-def cfg(tmp_path: Path):
-    p = tmp_path / "bau.yaml"
-    p.write_text(MINIMAL.replace("/Users/nakomis/bau", str(tmp_path)))
-    return load_config(p)
 
 
 def client(cfg, tmp_path, plane=None, static="make"):
@@ -104,7 +95,7 @@ def test_abandon_route(cfg, tmp_path):
 
 def test_abandon_during_run_is_409(cfg, tmp_path):
     plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
-    with run_lock(cfg.paths.logs.parent / "run.lock"):
+    with run_lock(cfg.paths.lock):
         r = client(cfg, tmp_path, plane).post("/abandon/HOME-42", headers=AUTH)
     assert r.status_code == 409
     assert r.json() == {"error": "another BAU operation is in progress; try again shortly"}
@@ -223,7 +214,7 @@ def test_answers_error_statuses(cfg, tmp_path):
 
 
 def test_answers_and_not_bau_during_run_are_409(cfg, tmp_path):
-    with run_lock(cfg.paths.logs.parent / "run.lock"):
+    with run_lock(cfg.paths.lock):
         c = client(cfg, tmp_path, _waiting())
         r1 = c.post("/answers/HOME-42", json=_ANSWERS, headers=AUTH)
         r2 = c.post("/not-bau/HOME-42", headers=AUTH)

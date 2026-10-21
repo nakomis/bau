@@ -18,11 +18,15 @@ def test_parser_subcommands():
     assert p.parse_args(["probe"]).command == "probe"
 
 
+def test_default_config_dir_is_under_bau_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("BAU_HOME", str(tmp_path / "elsewhere"))
+    assert build_parser().parse_args(["run"]).config == tmp_path / "elsewhere" / "config"
+
+
 def test_config_dir_option_before_or_after_subcommand():
     p = build_parser()
     assert p.parse_args(["--config", "/a", "run"]).config == Path("/a")
     assert p.parse_args(["run", "--config", "/b"]).config == Path("/b")
-    assert p.parse_args(["run"]).config == Path("/Users/nakomis/bau/src/config")
 
 
 @pytest.mark.parametrize("reason", ["ok", "cutoff", "pace", "paused", "five-hour"])
@@ -125,9 +129,7 @@ def test_snapshot_ignores_unknown_last_run_keys(tmp_path, monkeypatch):
             }
         )
     )
-    cfg = SimpleNamespace(
-        paused=False, paths=SimpleNamespace(snapshot=snap, pause_file=tmp_path / "paused"), nudge=NUDGE
-    )
+    cfg = SimpleNamespace(paths=SimpleNamespace(snapshot=snap, pause_file=tmp_path / "paused"), nudge=NUDGE)
     monkeypatch.setattr(cli, "load_config", lambda p: cfg)
     monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW, FRESH))
     assert cli.main(["snapshot"]) == 0
@@ -181,11 +183,12 @@ def run_world(tmp_path, monkeypatch):
 
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    (config_dir / "bau.yaml").write_text("paused: false\n")
     cfg = SimpleNamespace(
-        paused=False,
         paths=SimpleNamespace(
-            snapshot=tmp_path / "state.json", logs=tmp_path / "logs", pause_file=tmp_path / "paused"
+            snapshot=tmp_path / "state.json",
+            logs=tmp_path / "logs",
+            pause_file=tmp_path / "paused",
+            lock=tmp_path / "run.lock",
         ),
         nudge=NUDGE,
         claude=SimpleNamespace(oauth_token=None),
@@ -236,7 +239,7 @@ def test_the_run_rereads_the_paused_flag(run_world):
     assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
     paused = StubNight.instances[0].kwargs["paused"]
     assert paused() is False
-    (run_world.config_dir / "bau.yaml").write_text("paused: true\n")
+    run_world.cfg.paths.pause_file.write_text("")
     assert paused() is True
 
 
@@ -254,7 +257,7 @@ def test_a_second_run_exits_quietly_while_one_holds_the_lock(run_world, capsys, 
 
     monkeypatch.setattr(run_world.cli, "RUN_LOCK_WAIT", 0)
 
-    lock = run_world.cfg.paths.logs.parent / "run.lock"
+    lock = run_world.cfg.paths.lock
     with open(lock, "a") as held:
         fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
@@ -285,7 +288,7 @@ def test_cli_abandon_invalid_ref_exits_2(capsys):
     args = SimpleNamespace(ref="home-42", note="")
     cfg = SimpleNamespace(
         identities=SimpleNamespace(worker_github_login="w", worker_plane_email="e"),
-        paths=SimpleNamespace(logs=Path("/nonexistent/logs")),
+        paths=SimpleNamespace(lock=Path("/nonexistent/run.lock")),
     )
     assert _abandon(args, cfg, ({}, P(), None, None, None, None, FRESH)) == 2
     assert "invalid ref" in capsys.readouterr().out
@@ -297,7 +300,7 @@ def test_run_that_cannot_get_the_lock_writes_a_locked_snapshot(run_world, monkey
     from bau.snapshot import read_snapshot
 
     monkeypatch.setattr(run_world.cli, "RUN_LOCK_WAIT", 0)
-    lock = run_world.cfg.paths.logs.parent / "run.lock"
+    lock = run_world.cfg.paths.lock
     with open(lock, "a") as held:
         fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
@@ -503,7 +506,7 @@ def test_locked_out_without_atc_still_records_locked(run_world, monkeypatch):
 
     monkeypatch.setattr(run_world.cli, "wire", down)
     monkeypatch.setattr(run_world.cli, "RUN_LOCK_WAIT", 0)
-    lock = run_world.cfg.paths.logs.parent / "run.lock"
+    lock = run_world.cfg.paths.lock
     with open(lock, "a") as held:
         fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
@@ -613,3 +616,65 @@ def test_serve_without_atc_or_cache_serves_with_no_projects(run_world, monkeypat
 def test_version_command_needs_no_config(capsys):
     assert main(["--config", "/nonexistent", "version"]) == 0
     assert capsys.readouterr().out.startswith("bau ")
+
+
+def test_every_lock_user_agrees(tmp_path, monkeypatch):
+    """`bau run`, `bau abandon` and the API all take the lock at cfg.paths.lock, not a path
+    derived from the logs directory."""
+    from bau import api, cli
+    from tests.conftest import make_config
+
+    cfg = make_config(tmp_path)
+    lock = tmp_path / "state" / "run.lock"
+    object.__setattr__(cfg.paths, "lock", lock)
+    object.__setattr__(cfg.paths, "logs", tmp_path / "elsewhere" / "logs")
+    monkeypatch.setattr(cli, "load_config", lambda p: cfg)
+
+    taken = []
+
+    class Held:
+        def __enter__(self):
+            return True
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(cli, "run_lock", lambda path, *a: taken.append(path) or Held())
+    monkeypatch.setattr(cli, "_run", lambda args, c: 0)
+    assert main(["run"]) == 0
+    assert taken == [lock] and lock.parent.is_dir() and cfg.paths.logs.is_dir()
+
+    seen = {}
+
+    def fake_abandon(key):
+        def abandon(*a, **kw):
+            seen[key] = kw["lock_path"]
+            return SimpleNamespace(ref="X-1", pr=None, restored_state="")
+
+        return abandon
+
+    monkeypatch.setattr(cli, "wire", lambda c, d: ({}, None, None, None, None, None, None))
+    monkeypatch.setattr(
+        cli,
+        "abandon",
+        lambda *a, **kw: (
+            seen.update(cli=kw["lock_path"]) or SimpleNamespace(ref="X-1", pr=None, restored_state="")
+        ),
+    )
+    monkeypatch.setattr(cli, "drop_open_pr", lambda *a: None)
+    assert main(["abandon", "X-1"]) == 0
+    assert seen["cli"] == lock
+
+    monkeypatch.setattr(
+        api,
+        "abandon",
+        lambda *a, **kw: (
+            seen.update(api=kw["lock_path"]) or SimpleNamespace(ref="X-1", pr=None, restored_state="")
+        ),
+    )
+    monkeypatch.setattr(api, "drop_open_pr", lambda *a: None)
+    from fastapi.testclient import TestClient
+
+    app = api.create_app(cfg, {}, None, None, None, tmp_path, "t")
+    TestClient(app).post("/abandon/X-1", headers={"X-Bau-Proxy-Token": "t"})
+    assert seen["api"] == lock
