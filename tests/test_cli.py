@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from bau.atc import AtcState, AtcUnavailable
-from bau.cli import ClientFactory, build_parser, exit_code, snapshot_rows
+from bau.cli import ClientFactory, build_parser, exit_code, main, snapshot_rows
 from bau.config import Nudge
 from bau.github import Token
 from bau.snapshot import OpenPrRow
@@ -608,3 +608,8 @@ def test_serve_without_atc_or_cache_serves_with_no_projects(run_world, monkeypat
     assert run_world.cli.main(["serve", "--config", str(run_world.config_dir)]) == 0
     assert served["app"] == ("app", {}) and served["state"].stale
     assert "serving with no projects" in capsys.readouterr().err
+
+
+def test_version_command_needs_no_config(capsys):
+    assert main(["--config", "/nonexistent", "version"]) == 0
+    assert capsys.readouterr().out.startswith("bau ")

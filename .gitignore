@@ -236,3 +236,6 @@ lcov.info
 web/node_modules/
 web/dist/
 web/coverage/
+
+# Build stamp, written by the release build
+bau/_build.py

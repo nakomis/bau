@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from bau import version as build
 from bau.abandon import (
     RUN_IN_PROGRESS,
     AlreadyAbandoned,
@@ -66,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     ab = sub.add_parser("abandon", help="abandon a picked-up item", parents=[common])
     ab.add_argument("ref")
     ab.add_argument("--note", default="")
+    sub.add_parser("version", help="print the build version", parents=[common])
     return p
 
 
@@ -395,7 +397,14 @@ def _locked_out(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def _version() -> int:
+    print(f"bau {build.VERSION} ({build.GIT_SHA or 'unstamped'})")
+    return 0
+
+
 def _dispatch(args: argparse.Namespace) -> int:
+    if args.command == "version":  # before load_config: needs no config file
+        return _version()
     cfg = load_config(args.config / "bau.yaml")
     if args.command == "run":
         with run_lock(cfg.paths.logs.parent / "run.lock", RUN_LOCK_WAIT) as held:
