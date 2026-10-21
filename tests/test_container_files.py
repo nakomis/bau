@@ -1,6 +1,5 @@
 import plistlib
 import re
-import subprocess
 from pathlib import Path
 
 import yaml
@@ -69,10 +68,6 @@ def test_compose_network_name_matches_config():
 
 
 def test_egress_image_built_from_pinned_alpine_and_no_latest():
-    compose = yaml.safe_load((ROOT / "container" / "compose.yml").read_text())
-    for svc in compose["services"].values():
-        assert svc["build"]["dockerfile"] == "egress.Dockerfile"
-        assert ":latest" not in svc["image"]
     egress = (ROOT / "container" / "egress.Dockerfile").read_text()
     assert re.search(r"^FROM alpine:\d+\.\d+", egress, re.MULTILINE)
     assert "apk add --no-cache tinyproxy" in egress
@@ -89,61 +84,71 @@ def test_dockerfile_has_no_uv_toml_noop():
     assert "uv.toml" not in DOCKERFILE
 
 
+def render(name, bau_home="/Users/x/Library/Application Support/BAU", home="/Users/x"):
+    text = (ROOT / "launchd" / f"com.nakomis.{name}.plist.in").read_text()
+    return plistlib.loads(text.replace("@BAU_HOME@", bau_home).replace("@HOME@", home).encode())
+
+
+def test_rendered_plists_keep_the_space():
+    for name in ("bau-run", "bau-snapshot", "bau-api"):
+        p = render(name)
+        assert p["ProgramArguments"][0] == "/Users/x/Library/Application Support/BAU/current/venv/bin/bau"
+        assert p["EnvironmentVariables"]["BAU_HOME"] == "/Users/x/Library/Application Support/BAU"
+        assert p["StandardOutPath"] == f"/Users/x/Library/Logs/BAU/{name}.log"
+        assert p["StandardErrorPath"] == p["StandardOutPath"]
+        assert p["EnvironmentVariables"]["DOCKER_HOST"] == "unix:///Users/x/.colima/default/docker.sock"
+
+
+def test_templates_name_no_home_and_no_other_placeholder():
+    templates = list((ROOT / "launchd").glob("*.plist.in"))
+    assert len(templates) == 3
+    for f in templates:
+        text = f.read_text()
+        assert "/Users/" not in text
+        assert set(re.findall(r"@[A-Z_]+@", text)) <= {"@BAU_HOME@", "@HOME@"}
+
+
+def test_only_templates_in_launchd_dir():
+    assert not list((ROOT / "launchd").glob("*.plist"))
+
+
 def test_every_plist_path_has_claude_and_homebrew():
-    for f in sorted((ROOT / "launchd").glob("*.plist")):
-        path = plistlib.loads(f.read_bytes())["EnvironmentVariables"]["PATH"].split(":")
-        assert path[0] == "/Users/nakomis/.local/bin", f.name
-        assert "/opt/homebrew/bin" in path, f.name
-        env = plistlib.loads(f.read_bytes())["EnvironmentVariables"]
-        assert env["PYTHONUNBUFFERED"] == "1", f.name
-
-
-def _plist(name):
-    with open(ROOT / "launchd" / f"com.nakomis.{name}.plist", "rb") as f:
-        return plistlib.load(f)
+    for name in ("bau-run", "bau-snapshot", "bau-api"):
+        env = render(name)["EnvironmentVariables"]
+        path = env["PATH"].split(":")
+        assert path[0] == "/Users/x/.local/bin", name
+        assert "/opt/homebrew/bin" in path, name
+        assert env["PYTHONUNBUFFERED"] == "1", name
 
 
 def test_run_plist():
-    p = _plist("bau-run")
+    p = render("bau-run")
     assert p["Label"] == "com.nakomis.bau-run"
     assert p["ProgramArguments"][-1] == "run"
     assert p["StartCalendarInterval"] == {"Hour": 1, "Minute": 0}
 
 
 def test_snapshot_plist():
-    p = _plist("bau-snapshot")
+    p = render("bau-snapshot")
     assert p["Label"] == "com.nakomis.bau-snapshot"
     assert p["ProgramArguments"][-1] == "snapshot"
     assert p["StartCalendarInterval"] == [{"Hour": h, "Minute": 30} for h in range(7, 24)]
     assert len(p["StartCalendarInterval"]) == 17
 
 
+def test_api_plist_keeps_alive():
+    p = render("bau-api")
+    assert p["ProgramArguments"][-1] == "serve"
+    assert p["RunAtLoad"] is True and p["KeepAlive"] is True
+
+
 def test_no_sweep_plist():
-    assert not (ROOT / "launchd" / "com.nakomis.bau-sweep.plist").exists()
-    assert "bau-sweep" in (ROOT / "install.sh").read_text()  # only the legacy clean-up
-    assert "bau-sweep bau-api" not in (ROOT / "install.sh").read_text()
+    assert not list((ROOT / "launchd").glob("com.nakomis.bau-sweep.plist*"))
 
 
-def test_install_script_installs_every_plist():
-    script = (ROOT / "install.sh").read_text()
-    for f in (ROOT / "launchd").glob("*.plist"):
-        assert f.stem.removeprefix("com.nakomis.") in script, f.name
-
-
-def test_install_script_syntax():
-    script = ROOT / "install.sh"
-    assert script.read_text().startswith("#!/usr/bin/env bash")
-    r = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-
-
-def test_install_script_builds_agent_image_with_load():
-    # With a docker-container buildx builder current, a plain `docker build`
-    # leaves the image in the build cache only; --load puts it in the local store.
-    lines = [
-        line
-        for line in (ROOT / "install.sh").read_text().splitlines()
-        if line.startswith("docker build") and "bau-agent:latest" in line
-    ]
-    assert len(lines) == 1
-    assert "--load" in lines[0]
+def test_egress_config_is_baked_into_the_image():
+    df = (ROOT / "container" / "egress.Dockerfile").read_text()
+    assert "COPY tinyproxy.conf" in df and "COPY filter" in df
+    svc = yaml.safe_load((ROOT / "container" / "compose.yml").read_text())["services"]["bau-egress"]
+    assert "volumes" not in svc and "build" not in svc
+    assert svc["image"].startswith("${BAU_EGRESS_IMAGE")
