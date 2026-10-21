@@ -71,10 +71,12 @@ def test_unstamped_checkout_reports_local(monkeypatch):
     v = importlib.reload(bau.version)
     assert (v.VERSION, v.GIT_SHA, v.image_tag()) == ("0.0.0+local", "", None)
 
+
 def test_stamped_build_reports_its_stamp(monkeypatch):
     monkeypatch.setitem(sys.modules, "bau._build", types.SimpleNamespace(VERSION="0.4.2", GIT_SHA="abc1234"))
     v = importlib.reload(bau.version)
     assert v.image_tag() == "0.4.2-abc1234"
+
 
 def test_version_command_needs_no_config(capsys):  # tests/test_cli.py
     assert main(["--config", "/nonexistent", "version"]) == 0
@@ -132,32 +134,41 @@ def test_defaults_alone_load(tmp_path, monkeypatch):
     assert cfg.paths.lock.name == "run.lock" and cfg.paths.lock.parent == cfg.paths.snapshot.parent
     assert cfg.paths.logs == Path("~/Library/Logs/BAU").expanduser()
 
+
 def test_overlay_merges_nested_keys(tmp_path):
     (tmp_path / "host.yaml").write_text("limits:\n  session_budget_usd: 9.5\n")
     cfg = load_config(tmp_path)
     assert cfg.limits.session_budget_usd == 9.5
     assert cfg.limits.too_big_files == 15  # sibling kept from the defaults
 
+
 def test_unknown_host_key_is_an_error(tmp_path):
     (tmp_path / "host.yaml").write_text("pathz:\n  repos: /x\n")
     with pytest.raises(ValueError, match="pathz"):
         load_config(tmp_path)
 
+
 def test_container_image_follows_the_build_stamp(tmp_path, monkeypatch):
     monkeypatch.setattr("bau.config.image_tag", lambda: "0.4.2-abc1234")
-    assert load_config(tmp_path).container.image == "registry.home.nakomis.com/nakomis/bau-agent:0.4.2-abc1234"
+    assert (
+        load_config(tmp_path).container.image == "registry.home.nakomis.com/nakomis/bau-agent:0.4.2-abc1234"
+    )
     monkeypatch.setattr("bau.config.image_tag", lambda: None)
     assert load_config(tmp_path).container.image == "bau-agent:latest"
+
 
 def test_host_yaml_may_override_the_image(tmp_path):
     (tmp_path / "host.yaml").write_text("container:\n  image: bau-agent:dev\n")
     assert load_config(tmp_path).container.image == "bau-agent:dev"
 
+
 def test_nothing_shipped_names_a_home_directory():
     text = (Path(bau.__file__).parent / "defaults.yaml").read_text()
     assert "/Users/" not in text and "paused:" not in text
 
-def test_paused_reader_is_the_pause_file_only(tmp_path): ...
+
+def test_paused_reader_is_the_pause_file_only(tmp_path):
+    ...
     # absent -> False; present (with or without a reason) -> True; reason logged once, as today
 ```
 
@@ -185,8 +196,10 @@ Plus, in the named files:
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-def test_static_dir_prefers_the_packaged_copy(tmp_path, monkeypatch): ...
+def test_static_dir_prefers_the_packaged_copy(tmp_path, monkeypatch):
+    ...
     # packaged bau/web_dist present -> it; absent but web/dist present -> that; neither -> None
+
 
 def test_state_json_carries_the_version(client):
     body = client.get("/state.json").json()
@@ -237,6 +250,7 @@ def render(name, bau_home="/Users/x/Library/Application Support/BAU", home="/Use
     text = (ROOT / "launchd" / f"com.nakomis.{name}.plist.in").read_text()
     return plistlib.loads(text.replace("@BAU_HOME@", bau_home).replace("@HOME@", home).encode())
 
+
 def test_rendered_plists_keep_the_space():
     for name in ("bau-run", "bau-snapshot", "bau-api"):
         p = render(name)
@@ -244,11 +258,13 @@ def test_rendered_plists_keep_the_space():
         assert p["EnvironmentVariables"]["BAU_HOME"] == "/Users/x/Library/Application Support/BAU"
         assert p["StandardOutPath"] == f"/Users/x/Library/Logs/BAU/{name}.log"
 
+
 def test_templates_name_no_home_and_no_other_placeholder():
     for f in (ROOT / "launchd").glob("*.plist.in"):
         text = f.read_text()
         assert "/Users/" not in text
         assert set(re.findall(r"@[A-Z_]+@", text)) <= {"@BAU_HOME@", "@HOME@"}
+
 
 def test_egress_config_is_baked_into_the_image():
     df = (ROOT / "container" / "egress.Dockerfile").read_text()
@@ -315,8 +331,13 @@ def test_bundle_installs_and_reports_its_version(tmp_path):
         names = set(t.getnames())
         t.extractall(tmp_path, filter="data")
     d = tmp_path / "bau-9.9.9"
-    assert {f"bau-9.9.9/{n}" for n in ("VERSION", "SHA256SUMS", "requirements.txt", "compose.yml", "INSTALL")} <= names
-    assert "BAU_AGENT_IMAGE=registry.home.nakomis.com/nakomis/bau-agent:9.9.9-abc1234" in (d / "VERSION").read_text()
+    assert {
+        f"bau-9.9.9/{n}" for n in ("VERSION", "SHA256SUMS", "requirements.txt", "compose.yml", "INSTALL")
+    } <= names
+    assert (
+        "BAU_AGENT_IMAGE=registry.home.nakomis.com/nakomis/bau-agent:9.9.9-abc1234"
+        in (d / "VERSION").read_text()
+    )
     run(["shasum", "-a", "256", "-c", "SHA256SUMS"], cwd=d)
     for line in (d / "INSTALL").read_text().splitlines():
         run(["bash", "-c", line], cwd=d)
@@ -324,7 +345,9 @@ def test_bundle_installs_and_reports_its_version(tmp_path):
     assert (next((d / "venv/lib").glob("python3.12/site-packages/bau/web_dist/index.html"))).exists()
     assert not (Path.cwd() / "bau" / "_build.py").exists()  # checkout untouched
 
-def test_bundle_refuses_without_a_built_dashboard(tmp_path): ...
+
+def test_bundle_refuses_without_a_built_dashboard(tmp_path):
+    ...
     # in a temp repo copy with no web/dist: non-zero exit, stderr names web/dist, no tarball
 ```
 
@@ -376,8 +399,17 @@ def test_release_publishes_only_from_main_and_in_order():
     assert jobs["images"]["needs"] == ["version"] or set(jobs["images"]["needs"]) == {"version"}
     assert {"version", "images", "web"} <= set(jobs["release"]["needs"])
     for job in ("images", "release"):
-        publish_steps = [s for s in jobs[job]["steps"] if "push" in str(s.get("if", "")) or "gh release create" in s.get("run", "")]
-        assert publish_steps and all("refs/heads/main" in str(s.get("if", "")) + str(jobs[job].get("if", "")) + str(jobs[job].get("env", "")) for s in publish_steps)
+        publish_steps = [
+            s
+            for s in jobs[job]["steps"]
+            if "push" in str(s.get("if", "")) or "gh release create" in s.get("run", "")
+        ]
+        assert publish_steps and all(
+            "refs/heads/main"
+            in str(s.get("if", "")) + str(jobs[job].get("if", "")) + str(jobs[job].get("env", ""))
+            for s in publish_steps
+        )
+
 
 def test_images_are_arm64_only_and_never_latest():
     images = load("ci.yml")["jobs"]["images"]
@@ -386,10 +418,14 @@ def test_images_are_arm64_only_and_never_latest():
     assert "linux/arm64" in text and "linux/amd64" not in text and ":latest" not in text
     assert "--provenance=false" in text and "--sbom=false" in text
 
+
 def test_bundle_smoke_runs_before_publishing():
     steps = load("ci.yml")["jobs"]["release"]["steps"]
     names = [s.get("name", "") for s in steps]
-    assert names.index("bundle-smoke") < next(i for i, s in enumerate(steps) if "gh release create" in s.get("run", ""))
+    assert names.index("bundle-smoke") < next(
+        i for i, s in enumerate(steps) if "gh release create" in s.get("run", "")
+    )
+
 
 def test_secrets_only_in_the_release_environment():
     jobs = load("ci.yml")["jobs"]
@@ -397,8 +433,10 @@ def test_secrets_only_in_the_release_environment():
         if "secrets.NEXUS" in yaml.safe_dump(job):
             assert "release" in str(job.get("environment", "")), name
 
+
 def test_ci_status_waits_for_the_release_jobs():
     assert {"version", "images", "release"} <= set(load("ci.yml")["jobs"]["ci-status"]["needs"])
+
 
 def test_bau_installed_records_prod_for_a_real_release():
     wf = load("bau-installed.yml")
