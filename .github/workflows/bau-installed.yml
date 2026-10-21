@@ -1,0 +1,59 @@
+name: BAU installed
+
+# Records a BAU install on a host in the shared deployment tracker
+# (project `bau`, environment `prod`).
+#
+# Triggered by phase 3's Ansible play after it has installed and loaded a
+# released bundle (`gh workflow run`). It exists because the tracker only
+# accepts the allow-listed CI roles: the host's own AWS credentials cannot
+# record anything there. `sandbox` (released) is recorded by ci.yml's release
+# job.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "BAU version installed (x.y.z, a bau-v<version> release)"
+        required: true
+      host:
+        description: "The host it was installed on"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Check the version is a released one
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::not x.y.z: $VERSION"; exit 1; }
+          gh release view "bau-v$VERSION" -R "$REPO" > /dev/null || { echo "::error::no release bau-v$VERSION"; exit 1; }
+      # Check out the release's own commit, so record-deployment's commitHash is
+      # the commit the bundle was built from.
+      - uses: actions/checkout@v7
+        with:
+          ref: bau-v${{ inputs.version }}
+      - name: version.json
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          printf '{\n  "version": "%s"\n}\n' "$VERSION" > "$RUNNER_TEMP/version.json"
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_SANDBOX_ROLE_ARN }}
+          aws-region: eu-west-2
+      - uses: nakomis/nakomis-infra/.github/actions/record-deployment@main
+        with:
+          project: bau
+          environment: prod
+          version-file: ${{ runner.temp }}/version.json
+      - run: echo "::notice::BAU ${{ inputs.version }} installed on ${{ inputs.host }}"
