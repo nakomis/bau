@@ -10,6 +10,8 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import bau
+import bau.version
 from bau.abandon import (
     RUN_IN_PROGRESS,
     AlreadyAbandoned,
@@ -42,6 +44,15 @@ SECURITY_HEADERS = {
 # The page names its hashed assets, so it must be re-checked on every load
 # after an upgrade; the hashed assets themselves may be cached.
 NO_CACHE_PATHS = {"/", "/index.html"}
+
+
+def static_dir() -> Path | None:
+    """The dashboard to serve: the copy packaged in the wheel, else the checkout's build, else none."""
+    root = Path(bau.__file__).parent
+    for candidate in (root / "web_dist", root.parent / "web" / "dist"):
+        if candidate.is_dir():
+            return candidate
+    return None
 
 
 class Forbidden(Exception):
@@ -87,8 +98,10 @@ def create_app(
     @app.get("/state.json")
     def state():
         snap = read_snapshot(cfg.paths.snapshot)
+        body = dict(snap) if snap is not None else {"schema": 1, "missing": True}
+        body["version"] = {"version": bau.version.VERSION, "sha": bau.version.GIT_SHA or "unstamped"}
         return JSONResponse(
-            snap if snap is not None else {"schema": 1, "missing": True},
+            body,
             headers={"Cache-Control": "no-store"},
         )
 
@@ -113,7 +126,7 @@ def create_app(
                 worker_login=cfg.identities.worker_github_login,
                 worker_email=cfg.identities.worker_plane_email,
                 note=body.note if body else "",
-                lock_path=cfg.paths.logs.parent / "run.lock",
+                lock_path=cfg.paths.lock,
             )
         except InvalidRef:
             return JSONResponse({"error": "invalid ref"}, status_code=400)
@@ -132,7 +145,7 @@ def create_app(
             log.warning("snapshot update after abandon %s failed: %s", ref, type(e).__name__)
         return {"ref": r.ref, "pr": r.pr, "restored_state": r.restored_state}
 
-    lock_path = cfg.paths.logs.parent / "run.lock"
+    lock_path = cfg.paths.lock
 
     def question_write(ref: str, what: str, action: Callable[[], None]):
         try:

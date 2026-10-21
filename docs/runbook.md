@@ -5,19 +5,27 @@ Operating notes for the nightly BAU worker on Cere. Everything runs as the `nako
 ## Prerequisites
 
 - Homebrew, with `uv` installed (`brew install uv`).
-- Colima running. Export `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` in the shell that runs `install.sh`.
+- Colima running. The launchd plists set `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock`; export the same in an interactive shell that runs `docker` by hand.
 - The `claude` CLI at `~/.local/bin/claude`, logged in as the `nakomis` user.
+
+No `pnpm`, Node or `docker build` is needed on Cere: CI builds the dashboard, the wheel and the images.
 
 ## Layout on Cere
 
+> Target layout, built by BAU-25; Cere is still on the checkout install until then.
+
+`BAU_HOME` defaults to `~/Library/Application Support/BAU` (the path has a space; arguments containing it are passed whole, as argv or plist strings, never through a shell). Nothing under it is a git repository, and nothing is edited by hand except `state/paused`.
+
 | Path | Contents |
 |------|----------|
-| `~/bau/src` | The git checkout. `install.sh` must be run from here. |
-| `~/bau/repos` | Bare clones of the target repositories |
-| `~/bau/work` | Per-session checkouts |
-| `~/bau/logs` | `bau-run.log`, `bau-snapshot.log`, and per-session logs |
-| `~/bau/state.json` | Snapshot read by the dashboard |
-| `~/.config/bau/` | Plane client certificate and key (`cere.crt.pem`, `cere.key.pem`) |
+| `$BAU_HOME/releases/<version>/` | One unpacked release bundle: `venv/`, `launchd/`, `compose.yml`, `.env`, `VERSION` |
+| `$BAU_HOME/current` | Symlink to the live release; the launchd jobs run `current/venv/bin/bau` |
+| `$BAU_HOME/config/host.yaml` | Host facts, deep-merged over the policy in the wheel (`bau/defaults.yaml`). Rendered by Ansible |
+| `$BAU_HOME/config/cere.crt.pem`, `cere.key.pem` | Plane client certificate and key (mode 0600) |
+| `$BAU_HOME/state/` | `state.json` (snapshot read by the dashboard), `paused`, `atc-cache.json`, `run.lock` |
+| `$BAU_HOME/repos` | Bare clones of the target repositories |
+| `$BAU_HOME/work` | Per-session checkouts |
+| `~/Library/Logs/BAU` | `bau-run.log`, `bau-snapshot.log`, `bau-api.log`, and per-session logs |
 
 ## Keychain items
 
@@ -33,79 +41,80 @@ Secrets are read from the macOS login keychain, service `bau` (`bau/secrets.py`)
   `security add-generic-password -s bau -a proxy-token -w "$(openssl rand -hex 32)"`
   The same value goes in SSM `/bau/proxy-token` for Leia.
 
-Check an item exists with `security find-generic-password -s bau -a <account>`. `install.sh` warns if any is missing.
+Check an item exists with `security find-generic-password -s bau -a <account>`. Once BAU-25 lands, the Cere play asserts they are present.
 
 ## Configuration
 
-`config/bau.yaml` holds the policy and the non-secret identifiers:
+Policy (schedule, limits, models, identities, the GitHub App ids, the Plane and ATC URLs) lives in `bau/defaults.yaml`, packaged in the wheel. It changes by pull request and release, so a rollback restores the policy that went with the code. It is never edited on the host.
 
-- `github_app.app_id` and `github_app.installation_id`: set these to the real values from the GitHub App. They ship as `0`.
-- `plane.client_cert` and `plane.client_key`: paths to the Plane mTLS client pair, under `~/.config/bau/`.
+Only host facts go in `$BAU_HOME/config/host.yaml`, which is deep-merged over the defaults. It is optional; `config/host.example.yaml` documents every key you may override (the Plane client certificate paths, `paths.*`, `container.image`). An unknown top-level key is an error. Paths may use `${BAU_HOME}` and `~`.
 
-## First install
+The projects BAU works on come only from ATC; there is no project file (see "Adding a repository to BAU"). Pausing is only the `state/paused` file (see "Pause").
+
+## Install
+
+Cere installs through the home-servers Ansible play (tracked as BAU-25), which fetches the release bundle from the GitHub release `bau-v<version>`, verifies `SHA256SUMS`, builds the venv from the hashed requirements, pulls the two images, smoke-tests the new release, then flips `current` and reloads the jobs. The version is the `bau_version` pin in home-servers `cere/ansible`. Every Jedi playbook run goes through the midichlorian MCP.
+
+Until that play lands, Cere stays on its old checkout install, pinned by home-infra #484; `install.sh` no longer exists in this repository. Retiring `~/bau/src.retired` is BAU-26.
+
+The release bundle, `bau-<version>.tar.gz`, holds the wheel, a hashed `requirements.txt`, the launchd plist templates (`@BAU_HOME@` and `@HOME@` placeholders), `compose.yml` for the egress proxy, `INSTALL`, `VERSION` (version, SHA and the two image refs) and `SHA256SUMS`. The images are `registry.home.nakomis.com/nakomis/bau-agent:<version>-<sha>` and `bau-egress:<version>-<sha>`, `linux/arm64`.
+
+Check what is running with `bau version` (prints `bau <version> (<sha>)`; `unstamped` for a development checkout); the dashboard footer shows the same version.
+
+## Development loop
+
+From a checkout, with no install:
 
 ```bash
-git clone git@github.com:nakomis/bau.git ~/bau/src
-cd ~/bau/src
-./install.sh
+uv sync
+cp config/host.example.yaml config/host.yaml   # then uncomment what you need; gitignored
+uv run bau --config config/ run --dry-run
 ```
 
-`install.sh` creates `~/bau/{repos,work,logs}`, runs `uv sync --frozen`, builds the `bau-agent:latest` image from `container/Dockerfile`, builds and starts the egress proxy with `docker compose -f container/compose.yml up -d --build`, and installs and bootstraps the launchd jobs.
+`config/host.yaml` is not committed. A checkout reports `unstamped` from `bau version` and uses the dashboard in `web/dist` if `pnpm build` has been run. The agent image is derived from the build stamp, so set `container.image` in `host.yaml` (for example `bau-agent:dev`) to use a locally built one.
 
 ## Dry run
 
 Run this once the keychain items and GitHub App ids are in place:
 
 ```bash
-cd ~/bau/src
-.venv/bin/bau probe            # prints the current usage windows (RateLimit(...))
-.venv/bin/bau run --dry-run    # lists what a real run would do, starts no sessions
+BAU=~/Library/"Application Support"/BAU/current/venv/bin/bau   # the target layout, once BAU-25 lands
+$BAU probe            # prints the current usage windows (RateLimit(...))
+$BAU run --dry-run    # lists what a real run would do, starts no sessions
 ```
 
 `bau probe` prints `None` when no rate-limit event arrives from Claude Code (telemetry missing); the nightly run then records `telemetry: missing`.
 
-A dry run prints a `preflight:` line, then one line per planned action (`feedback`, `ready`, `merged`, or `new-ticket BAU-n -> <repo> (<model>)`), or a decline. If nothing is planned it prints `nothing to do`. It does not write `~/bau/state.json`. Other CLI commands: `bau run` (the real nightly run) and `bau snapshot` (refresh `state.json` without starting sessions). All accept `--config <dir>`, which defaults to `/Users/nakomis/bau/src/config`.
+A dry run prints a `preflight:` line, then one line per planned action (`feedback`, `ready`, `merged`, or `new-ticket BAU-n -> <repo> (<model>)`), or a decline. If nothing is planned it prints `nothing to do`. It does not write `state/state.json`. Other CLI commands: `bau run` (the real nightly run) and `bau snapshot` (refresh `state.json` without starting sessions). All accept `--config <dir>`, the directory holding `host.yaml`, which defaults to `$BAU_HOME/config`. `bau version` prints the build version.
 
 ## Schedule
 
-- `com.nakomis.bau-run`: 01:00 every night, runs `bau run`.
+- `com.nakomis.bau-run`: 01:00 every night, runs `bau run`. The sweep, triage and questions are steps of the night, not separate jobs.
 - `com.nakomis.bau-snapshot`: hourly from 07:30 to 23:30, runs `bau snapshot`.
-- `com.nakomis.bau-sweep`: 00:15 every Sunday, runs `bau sweep`, which does nothing unless it is the first Sunday of the month.
+- `com.nakomis.bau-api`: kept alive, runs `bau serve`.
 
-No new sessions start after the `no_new_sessions_after` cut-off in `config/bau.yaml` (05:00, Europe/London).
+No new sessions start after the `no_new_sessions_after` cut-off in `bau/defaults.yaml` (05:00, Europe/London). The plists are templates in the release bundle, so a schedule change is a pull request and a release, and rolls back with the code.
 
 ## Sweep
 
-Once a month (00:15 on the first Sunday) `bau sweep` reads the open items of every project in `projects.yaml` and asks an agent which are candidates for BAU: small and well specified, stale, duplicates, or already done by a merged BAU PR. The result is a summary item named "Sweep <Month YYYY>" in the BAU project, plus a comment on each candidate saying why it was suggested. A second sweep in the same month adds to that item instead of creating another.
+Each night the sweep reads the open items of every BAU-enabled project in ATC and labels them itself, with an agent's verdict: `BAU` for items it judges small and well specified, `not-bau` for the rest. It posts a `[bau:swept]` comment on each item saying why, quoting the agent's reason as `the sweep agent said: "..."` with brackets and link schemes stripped. There is no summary item. Items labelled `BAU` then go through triage and the questions queue like any other. See `docs/superpowers/specs/2026-10-18-bau-questions-design.md`.
 
-The sweep only proposes. It never adds the `BAU` label, never changes an item's state and never writes `state.json`; Martin labels the candidates he agrees with.
+An item is swept only if it is unlabelled (not `BAU`, `bau-questions`, `not-bau` or `blocked`), in a backlog or unstarted state, assigned to nobody but the worker, and Martin has not commented on or edited it for `sweep_owner_quiet_days` (in `bau/defaults.yaml`). Items go to the agent in batches of `sweep_batch_items`.
 
-Label an item `not-bau` to stop the sweep suggesting it. The sweep also skips its own "Sweep <Month YYYY>" summaries, and it quotes the agent's reasons as `the sweep agent said: "..."` with brackets and link schemes stripped.
+Martin can overrule any verdict: remove or change the label in Plane. A `not-bau` label permanently excludes an item from the sweep.
 
-The sweep has its own limits in `config/bau.yaml`: `limits.sweep_session_wall_clock_minutes` (15) caps each session, and `schedule.sweep_no_new_sessions_after` (00:50, Europe/London) stops it starting sessions so a slow sweep cannot take the night's place. A sweep stopped that way ends with stop reason `sweep-cutoff` and exits 0; because the cut-off is a time of day, a `--force` sweep run later in the day will start no sessions.
-
-Try it any day without writing anything:
-
-```bash
-cd ~/bau/src
-.venv/bin/bau sweep --force --dry-run   # lists the projects it would review, starts no sessions
-.venv/bin/bau sweep --force             # a real sweep, outside the first Sunday
-```
-
-It shares `~/bau/run.lock` with the nightly run and `bau abandon`. The sweep waits up to 30 minutes for the lock and then gives up quietly; `bau run` waits up to an hour and, if it still cannot start, records `stop_reason: locked` in `state.json` and exits 0. Log: `~/bau/logs/bau-sweep.log`.
+The sweep shares `state/run.lock` with the night and `bau abandon`: `bau run` waits up to an hour for the lock and, if it still cannot start, records `stop_reason: locked` in `state.json` and exits 0.
 
 ## Pause
 
 ```bash
-echo "away until Monday" > ~/bau/paused   # or just: touch ~/bau/paused
-rm ~/bau/paused                           # resume
+echo "away until Monday" > "$HOME/Library/Application Support/BAU/state/paused"   # or just: touch it
+rm "$HOME/Library/Application Support/BAU/state/paused"                          # resume
 ```
 
-While `~/bau/paused` (`paths.pause_file` in `config/bau.yaml`) exists, policy refuses to start new sessions. Its contents, if any, are the reason; `bau` logs it to stderr (the run log) when it first sees the pause. The file lives outside the checkout, so pausing leaves `~/bau/src` clean and the Cere playbook can still update it.
+While `state/paused` (`paths.pause_file`) exists, policy refuses to start new sessions. Its contents, if any, are the reason; `bau` logs it to stderr (the run log) when it first sees the pause. This file is the only pause switch: there is no `paused` key in the YAML, and the dashboard only shows it (`paused` in the snapshot). Martin touches the file, and removes it to resume.
 
-`paused: true` in `config/bau.yaml` still pauses too, but it dirties the checkout; prefer the file.
-
-A running `bau run` re-reads both the pause file and the `paused` flag before every session, so a pause takes effect before the next session starts; a session already in progress runs to its end. Only a literal `paused: true` pauses (not `yes`, `"true"` or `1`). If `bau.yaml` fails to parse mid-run, the run keeps the last value it read. Merged PRs are still closed out and green drafts still marked ready while paused, since neither starts a session. For an immediate stop, see "Stop a run now".
+A running `bau run` re-reads the pause file before every session, so a pause takes effect before the next session starts; a session already in progress runs to its end. Merged PRs are still closed out and green drafts still marked ready while paused, since neither starts a session. For an immediate stop, see "Stop a run now".
 
 ## Stop a run now
 
@@ -118,13 +127,13 @@ ids=$(docker ps -q --filter label=bau.session=1)
 
 `bootout` sends `bau` SIGTERM. `bau` turns that into a clean exit: it kills the running agent container, writes `state.json` with `stop_reason: failed: SystemExit: 143`, and exits. The last two lines are a backstop for when `bau` could not clean up (for example after a SIGKILL): they kill any container labelled `bau.session=1`, which every agent session carries. The egress proxy (`bau-egress`) has no such label and is left running.
 
-Only one `bau run` runs at a time: a second one finds `~/bau/run.lock` held, prints `another bau run is in progress` and exits 0.
+Only one `bau run` runs at a time: a second one finds `state/run.lock` held, prints `another bau run is in progress` and exits 0.
 
-The job stays unloaded until `./install.sh` or `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nakomis.bau-run.plist` is run.
+The job stays unloaded until (once BAU-25 lands) the Ansible play (tag `bau`) or `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nakomis.bau-run.plist` is run.
 
 ## Dashboard and API
 
-`bau serve` runs under launchd as `com.nakomis.bau-api` on port 8800, behind Leia (which adds mTLS and the proxy token). It serves `/state.json`, the built dashboard from `web/dist`, and `POST /abandon/{ref}`.
+`bau serve` runs under launchd as `com.nakomis.bau-api` on port 8800, behind Leia (which adds mTLS and the proxy token). It serves `/state.json`, the built dashboard (packaged in the wheel as `bau/web_dist`), and `POST /abandon/{ref}`.
 
 The dashboard is a single page at `https://bau.home.nakomis.com/` (mTLS, Nakomis Home CA client certificate). It shows an overall tier, open PRs grouped by repository (each linking to GitHub and Plane), the last run, what is waiting to deploy, and the snapshot's age. The tier mirrors BD-1's BAU row (`mac/conversation-memory-forwarder/src/status.rs` in home-servers; the same rules live in `web/src/lib/tier.ts` and must change together):
 
@@ -140,46 +149,54 @@ The dashboard is a single page at `https://bau.home.nakomis.com/` (mTLS, Nakomis
 
 When Cere is wired, verify:
 
-1. `launchctl list | grep com.nakomis.bau-api` shows the job, and `ls ~/bau/src/web/dist/index.html` exists (the API serves that directory at `/`).
+1. `launchctl list | grep com.nakomis.bau-api` shows the job, and `bau version` runs from `current/venv/bin/bau` (the API serves the packaged dashboard at `/`, and its footer shows the version).
 2. On Cere: `curl -s localhost:8800/state.json | head -c 200` returns JSON, and `curl -sI localhost:8800/` shows `200`, `text/html`, `cache-control: no-cache` and a `content-security-policy` header.
 3. Via Leia, with the client certificate: `/` returns the page (not the 503 text) and `/state.json` returns JSON.
 4. In Chrome, the dashboard renders, the tier matches BD-1's BAU row, and the PR links open the right GitHub pull requests.
 
-- The `proxy-token` keychain item (see "Keychain items") must exist before the API job is installed. If it is missing, `install.sh` skips `com.nakomis.bau-api` with a loud message and installs the other jobs; add the item and re-run `./install.sh`.
+- The `proxy-token` keychain item (see "Keychain items") must exist before the API job is installed. If it is missing, once BAU-25 lands, the play skips `com.nakomis.bau-api` with a loud message and installs the other jobs; add the item and re-run the play.
 - Abandon from the shell: `bau abandon REF [--note "why"]`. It restores the item's previous state first, then closes the PR, deletes the checkout, removes the `BAU` label and posts a `[bau:abandoned]` comment.
 - Abandon takes the same lock as `bau run`. While a night is running it answers 409 ("another BAU operation is in progress; try again shortly"); try again after about 05:30.
 
 ## Logs
 
 ```bash
-less +F ~/bau/logs/bau-run.log          # the nightly run (stdout and stderr)
-less +F ~/bau/logs/bau-snapshot.log     # the hourly snapshot
-ls ~/bau/logs/                          # per-session logs: <date>-<REF>.log
-docker logs bau-egress                  # egress proxy: denied requests
+LOGS=~/Library/Logs/BAU
+less +F $LOGS/bau-run.log          # the nightly run (stdout and stderr)
+less +F $LOGS/bau-snapshot.log     # the hourly snapshot
+ls $LOGS/                          # per-session logs: <date>-<REF>.log
+docker logs bau-egress             # egress proxy: denied requests
 ```
 
-## Upgrade
+## Upgrade and rollback
 
-Do not upgrade while a run is active, roughly 01:00 to 05:30: `install.sh` reloads both jobs and would interrupt it. Use "Stop a run now" first if one is in progress.
+> Target procedure, built by BAU-25; Cere is still on the checkout install until then.
+
+Do not upgrade while a run is active, roughly 01:00 to 05:30: the play reloads the jobs and would interrupt it. Once BAU-25 lands, the play skips itself inside that window or while a run holds the lock, unless run with `-e bau_force=true`. Use "Stop a run now" first if one is in progress.
+
+Upgrading is a home-servers pull request bumping `bau_version` in `cere/ansible`, then `scripts/cere-ansible.sh --tags bau`, run through the midichlorian MCP. `-e bau_version=<v>` overrides the pin for a one-off.
+
+Rollback is the same in reverse: set `bau_version` back and run the play. Once BAU-25 lands, the three newest releases are kept under `releases/`, so a rollback is a symlink flip and a job reload, with no download or build. At the console, in an emergency:
 
 ```bash
-cd ~/bau/src
-git pull
-./install.sh
+cd ~/Library/"Application Support"/BAU
+ln -sfn releases/<previous-version> current
+launchctl kickstart -k gui/$(id -u)/com.nakomis.bau-api
 ```
 
-`install.sh` rebuilds the agent image and the egress proxy (`up -d --build`), so a change to `container/` is picked up.
+The plists name `current`, so nothing else moves. Images are never deleted from Nexus (`ALLOW_ONCE`), so an old tag can always be pulled. Never delete a release the deployment tracker has recorded; ship a fixed one instead.
 
 ## Uninstall
 
 ```bash
 launchctl bootout gui/$(id -u)/com.nakomis.bau-run
 launchctl bootout gui/$(id -u)/com.nakomis.bau-snapshot
-rm ~/Library/LaunchAgents/com.nakomis.bau-run.plist ~/Library/LaunchAgents/com.nakomis.bau-snapshot.plist
-cd ~/bau/src && docker compose -f container/compose.yml down
+launchctl bootout gui/$(id -u)/com.nakomis.bau-api
+rm ~/Library/LaunchAgents/com.nakomis.bau-{run,snapshot,api}.plist
+docker compose -p bau down
 ```
 
-The `rm` line stops launchd loading the jobs again at login.
+The `rm` line stops launchd loading the jobs again at login. `$BAU_HOME` holds the bare clones and checkouts; remove it only when you mean to discard them.
 
 ## Adding a repository to BAU
 

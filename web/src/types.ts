@@ -55,8 +55,10 @@ export type Pace = {
   seven_day_resets: number;
   elapsed_pct: number;
 };
+export type BuildVersion = { version: string; sha: string };
 export type Snapshot = {
   schema: number;
+  version?: BuildVersion;
   missing?: boolean;
   generated_at?: string;
   paused?: boolean;

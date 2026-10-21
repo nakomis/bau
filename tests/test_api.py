@@ -1,26 +1,19 @@
 import json
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from bau.api import create_app
-from bau.config import ProjectConfig, load_config
+import bau
+import bau.version
+from bau.api import create_app, static_dir
+from bau.config import ProjectConfig
 from bau.lock import run_lock
 from tests.fakes.clients import FakeGitHub, FakePlane, FakeRepos
 from tests.test_abandon import item, picked
-from tests.test_config import MINIMAL
 
 PROJECTS = {"HOME": ProjectConfig("HOME", "nakomis/home-infra", True, "")}
 TOKEN = "s3cret-token"
 AUTH = {"X-Bau-Proxy-Token": TOKEN}
-
-
-@pytest.fixture
-def cfg(tmp_path: Path):
-    p = tmp_path / "bau.yaml"
-    p.write_text(MINIMAL.replace("/Users/nakomis/bau", str(tmp_path)))
-    return load_config(p)
 
 
 def client(cfg, tmp_path, plane=None, static="make"):
@@ -36,7 +29,8 @@ def client(cfg, tmp_path, plane=None, static="make"):
 
 def test_state_missing_is_reported_not_500(cfg, tmp_path):
     r = client(cfg, tmp_path).get("/state.json")
-    assert r.status_code == 200 and r.json() == {"schema": 1, "missing": True}
+    body = r.json()
+    assert r.status_code == 200 and body.pop("version") and body == {"schema": 1, "missing": True}
 
 
 def test_state_served_from_file(cfg, tmp_path):
@@ -104,7 +98,7 @@ def test_abandon_route(cfg, tmp_path):
 
 def test_abandon_during_run_is_409(cfg, tmp_path):
     plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
-    with run_lock(cfg.paths.logs.parent / "run.lock"):
+    with run_lock(cfg.paths.lock):
         r = client(cfg, tmp_path, plane).post("/abandon/HOME-42", headers=AUTH)
     assert r.status_code == 409
     assert r.json() == {"error": "another BAU operation is in progress; try again shortly"}
@@ -223,7 +217,7 @@ def test_answers_error_statuses(cfg, tmp_path):
 
 
 def test_answers_and_not_bau_during_run_are_409(cfg, tmp_path):
-    with run_lock(cfg.paths.logs.parent / "run.lock"):
+    with run_lock(cfg.paths.lock):
         c = client(cfg, tmp_path, _waiting())
         r1 = c.post("/answers/HOME-42", json=_ANSWERS, headers=AUTH)
         r2 = c.post("/not-bau/HOME-42", headers=AUTH)
@@ -258,3 +252,35 @@ def test_answers_unexpected_error_is_500_without_detail(cfg, tmp_path):
     for r in responses:
         assert r.status_code == 500 and r.json() == {"error": "internal error"}
         assert "secret" not in r.text
+
+
+def test_static_dir_prefers_the_packaged_copy(tmp_path, monkeypatch):
+    monkeypatch.setattr(bau, "__file__", str(tmp_path / "bau" / "__init__.py"))
+    assert static_dir() is None
+    checkout = tmp_path / "web" / "dist"
+    checkout.mkdir(parents=True)
+    assert static_dir() == checkout
+    packaged = tmp_path / "bau" / "web_dist"
+    packaged.mkdir(parents=True)
+    assert static_dir() == packaged
+
+
+def test_state_json_carries_the_version(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(bau.version, "VERSION", "0.4.2")
+    monkeypatch.setattr(bau.version, "GIT_SHA", "abc1234")
+    c = client(cfg, tmp_path)
+    expected = {"version": "0.4.2", "sha": "abc1234"}
+    assert c.get("/state.json").json()["version"] == expected
+    cfg.paths.snapshot.parent.mkdir(parents=True, exist_ok=True)
+    cfg.paths.snapshot.write_text(json.dumps({"schema": 1, "open_prs": []}))
+    assert c.get("/state.json").json()["version"] == expected
+    assert "version" not in json.loads(cfg.paths.snapshot.read_text())
+
+
+def test_state_json_marks_an_unstamped_build(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(bau.version, "VERSION", "0.0.0+local")
+    monkeypatch.setattr(bau.version, "GIT_SHA", "")
+    assert client(cfg, tmp_path).get("/state.json").json()["version"] == {
+        "version": "0.0.0+local",
+        "sha": "unstamped",
+    }

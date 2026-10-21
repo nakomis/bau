@@ -1,7 +1,7 @@
 # Policy lives here, not in code: limits, schedule, models and identities.
 # Secrets are never in this file; they come from the macOS keychain, service `bau`.
-# Prefer `touch ~/bau/paused` (paths.pause_file) to pausing here: editing this file dirties the checkout.
-paused: false
+# To pause the worker, `touch` the file named by paths.pause_file; its contents are the reason.
+# Host-specific values go in host.yaml under the config directory (see config/host.example.yaml).
 
 schedule:
   no_new_sessions_after: "05:00"
@@ -59,8 +59,8 @@ plane:
   api_key:
     service: bau
     account: plane-api-key
-  client_cert: ~/.config/bau/cere.crt.pem
-  client_key: ~/.config/bau/cere.key.pem
+  client_cert: ${BAU_HOME}/config/cere.crt.pem
+  client_key: ${BAU_HOME}/config/cere.key.pem
 
 claude:
   oauth_token:
@@ -68,20 +68,21 @@ claude:
     account: claude-oauth-token
 
 paths:
-  repos: /Users/nakomis/bau/repos
-  work: /Users/nakomis/bau/work
-  logs: /Users/nakomis/bau/logs
-  snapshot: /Users/nakomis/bau/state.json
-  pause_file: /Users/nakomis/bau/paused
+  repos: ${BAU_HOME}/repos
+  work: ${BAU_HOME}/work
+  logs: ~/Library/Logs/BAU
+  snapshot: ${BAU_HOME}/state/state.json
+  pause_file: ${BAU_HOME}/state/paused
   # Last good copy of ATC's project list and priority, used when ATC is unreachable.
-  atc_cache: /Users/nakomis/bau/atc-cache.json
+  atc_cache: ${BAU_HOME}/state/atc-cache.json
+  lock: ${BAU_HOME}/state/run.lock
 
 # ATC (nakomis/atc) supplies the BAU-enabled projects and the order work is done in.
 # Reached through Leia's mTLS with the Plane client certificate above.
 atc:
   url: https://atc.plane.home.nakomis.com
 
+# container.image is derived from the build stamp unless host.yaml sets it.
 container:
-  image: bau-agent:latest
   network: bau-net
   proxy: http://bau-egress:8888

@@ -7,19 +7,9 @@ from pathlib import Path
 import pytest
 
 from bau import session
-from bau.config import load_config
 from bau.session import SessionRunner, docker_command
 
 FAKES = Path(__file__).parent / "fakes"
-
-
-@pytest.fixture
-def cfg(tmp_path: Path):
-    from tests.test_config import MINIMAL
-
-    p = tmp_path / "bau.yaml"
-    p.write_text(MINIMAL)
-    return load_config(p)
 
 
 @pytest.fixture
@@ -74,6 +64,18 @@ def run(cfg, tmp_path, mode: str, wall_clock: float = 60.0, **overrides):
 
 def kills(tmp_path: Path) -> str:
     return (tmp_path / "kills.txt").read_text()
+
+
+def test_session_mounts_a_path_with_a_space_as_one_argument(tmp_path):
+    from tests.conftest import make_config
+
+    work = tmp_path / "Application Support" / "work"
+    (tmp_path / "config").mkdir(exist_ok=True)
+    cfg = make_config(tmp_path)
+    object.__setattr__(cfg.paths, "work", work)
+    checkout = cfg.paths.work / "x"
+    cmd = docker_command(cfg, name="bau-x", checkout=checkout, bare=None, model="claude-opus-5-5", budget=5.0)
+    assert f"{checkout}:{checkout}" in cmd
 
 
 def test_docker_command_shape(cfg, tmp_path):

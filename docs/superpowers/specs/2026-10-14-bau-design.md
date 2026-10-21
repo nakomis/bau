@@ -46,15 +46,15 @@ All on Cere as the `nakomis` user (see the host-user amendment in section 2), wi
 
 | Component | Runs where | Role |
 |---|---|---|
-| launchd agents | host | `bau-run` nightly 01:00; `bau-snapshot` hourly 07:00–23:00; `bau-sweep` monthly, first Sunday 00:15 (amended 14 Oct 2026) |
+| launchd agents | host | `bau-run` nightly 01:00; `bau-snapshot` hourly 07:00–23:00; `bau-sweep` monthly, first Sunday 00:15 (amended 14 Oct 2026; later folded into the night run, so there are three jobs: run, snapshot, api) |
 | `bau-run` (Python) | host | Reads Plane and GitHub, applies policy, starts one container per session, parses the agent stream, writes the snapshot |
 | Agent container | Docker on Cere (OrbStack or Docker Desktop) | Linux image: Claude Code, git, gh, Node + pnpm, Python + uv, Swift for Linux, ruff, biome, vitest, pytest. Runs `claude -p` with permissions bypassed and `--max-budget-usd` |
 | `state.json` | host | Snapshot read by the dashboard, BD-1 and the API |
 | Write API (FastAPI) | host | `POST /abandon/{ref}` only. Serves the built dashboard as static files |
 | Dashboard (Vite + React, Tailwind 4, Biome, Vitest) | host, static | PRs awaiting review, deploy list, last run |
 | BD-1 line | Martin's Mac | Fetches the snapshot over the home network |
-| Repos folder | host, `/Users/bau/repos/<repo>.git` | Bare clone per repo, main fetched nightly. Mounted **read-only** into containers |
-| Ticket checkouts | host, `/Users/bau/work/<ref>-<slug>` | One per ticket: a clone made with `--reference` to the bare repo, so it borrows objects without copying and writes only to its own `.git`. Mounted read-write into that ticket's container |
+| Repos folder | host, `<BAU_HOME>/repos/<repo>.git` | Bare clone per repo, main fetched nightly. Mounted **read-only** into containers |
+| Ticket checkouts | host, `<BAU_HOME>/work/<ref>-<slug>` | One per ticket: a clone made with `--reference` to the bare repo, so it borrows objects without copying and writes only to its own `.git`. Mounted read-write into that ticket's container |
 
 The host holds everything persistent; the container holds nothing after it exits. No container can write to anything shared between tickets: the bare clone is read-only and each checkout has its own `.git`, so a confused agent can corrupt at most its own ticket.
 
@@ -87,7 +87,7 @@ The pace rule is re-evaluated before every session from the most recent `rate_li
 States in every project: New, Ready, In progress, Ready for test, Done, Archived. No review state is added.
 
 - **Eligibility.** Label `BAU`, applied by Martin only. `BAU-fable` additionally selects Fable 5.1. Items labelled `blocked` are skipped. Items with an open BAU PR are skipped. Nothing else qualifies.
-- **Repo resolution.** `config/projects.yaml` maps each Plane project to its GitHub repo, whether it deploys, and the deploy action text. A ticket may override with a line `repo: nakomis/<name>` in its description.
+- **Repo resolution.** ATC's BAU-enabled projects (formerly `config/projects.yaml`, amended 18 Oct 2026 and removed by the packaging work, BAU-24) map each Plane project to its GitHub repo, whether it deploys, and the deploy action text. A ticket may override with a line `repo: nakomis/<name>` in its description.
 - **Transitions.** Picked up → In progress, assigned to `bau@nakomis.com`. PR open → stays In progress, PR attached as a link. Merged → Ready for test (deploying repos) or Done. Abandoned or too big → previous state; abandon also removes the `BAU` label.
 - **Comments.** Every transition gets a short comment from `bau@nakomis.com`: picked up (branch name), PR opened (link), CI result, merged (commit), declined (reason), abandoned (by Martin, from the dashboard).
 - **The BAU project.** Prefix `BAU`, for the tool's own tickets. The worker may work its own tickets; that is the week-two rollout target.
@@ -106,7 +106,7 @@ Fixed text prepended to every session's brief. Summary of its rules:
 
 ## 7. Identities and credentials
 
-- **GitHub App `nakomis-bau`.** Created once by hand in the GitHub UI (no API exists for App creation). Permissions: contents read/write, pull requests read/write, metadata read, checks read, actions read, administration **read** (needed only to read branch protection; added during implementation 14 Oct 2026). No admin write, secrets, or workflows write. Installed on the BAU-eligible repos. **Amended 14 Oct 2026:** the installation's repository list is managed by hand in the App's installation settings (one checkbox per repo, alongside the repo's line in `config/projects.yaml`). Terraform was dropped: GitHub only lets a user change an installation's repositories, with a classic personal access token or a user-to-server token, and Martin chose a checkbox over keeping a long-lived token on file. App ID 5319638, installation 171462254. Private key in SSM `/bau/github-app-key`, written into Cere's login keychain by the Cere playbook. The runner mints an installation token per session, scoped to that session's repository only, so a hijacked session can reach one repo for one hour.
+- **GitHub App `nakomis-bau`.** Created once by hand in the GitHub UI (no API exists for App creation). Permissions: contents read/write, pull requests read/write, metadata read, checks read, actions read, administration **read** (needed only to read branch protection; added during implementation 14 Oct 2026). No admin write, secrets, or workflows write. Installed on the BAU-eligible repos. **Amended 14 Oct 2026:** the installation's repository list is managed by hand in the App's installation settings (one checkbox per repo, alongside the project's row in ATC; originally its line in `config/projects.yaml`). Terraform was dropped: GitHub only lets a user change an installation's repositories, with a classic personal access token or a user-to-server token, and Martin chose a checkbox over keeping a long-lived token on file. App ID 5319638, installation 171462254. Private key in SSM `/bau/github-app-key`, written into Cere's login keychain by the Cere playbook. The runner mints an installation token per session, scoped to that session's repository only, so a hijacked session can reach one repo for one hour.
 - **Branch protection is the wall, not the prompt.** Every BAU-eligible repo must have protection on `main` that requires a pull request, blocks force pushes, and does not exempt the App. Either classic branch protection or a repository ruleset qualifies; the runner checks both. The runner checks this at preflight and refuses to work a repo without it. The prompt's "never push to main" is a courtesy; the protection rule is what makes it true.
 - **Plane user `bau@nakomis.com`.** Member of every eligible project. Its API key lives in the `bau` keychain. All Plane writes use it.
 - **Anthropic.** The `bau` user is logged in to Claude Code with Martin's Max subscription via a long-lived token from `claude setup-token`, stored in the keychain and injected into the container as an environment variable per session.
@@ -135,7 +135,7 @@ declined: [{ref, reason, at}]
 
 ## 9. The deploy list
 
-- Listed: Plane items the worker moved to Ready for test, grouped by repo, with the merged PR and the deploy action from `projects.yaml`.
+- Listed: Plane items the worker moved to Ready for test, grouped by repo, with the merged PR and the deploy action from ATC (originally `projects.yaml`).
 - Closing a row is manual in version one: Martin deploys, then moves the item to Done (from Plane or the dashboard's deep link) and the row disappears at the next snapshot.
 - Automatic close via the shared deployment tracker is deferred to BAU ticket "Deploy auto-close from the deployment tracker" (section 16). Until then BAU has no AWS dependency.
 
@@ -143,24 +143,35 @@ declined: [{ref, reason, at}]
 
 Monthly, first Sunday 03:00, same preflight and pace guards. One session per active project, Opus 5.5.
 
-**Amended 14 Oct 2026 (implementation reviews):** the sweep runs at 00:15 on the first Sunday, before the night, and shares the run lock with it: the sweep waits up to 30 minutes for the lock, the night up to 60 (then records `stop_reason: locked`). Sweep sessions have their own 15-minute wall clock and no sweep session starts at or after 00:50, so the 01:00 night is never skipped. "Every active project" means every project in `projects.yaml`. Suppression is keyed on comments, not `updated_at`: an item the worker has suggested is not re-proposed until someone other than the worker comments on it. A `not-bau` label permanently excludes an item. A rerun in the same month reuses the open `Sweep <Month YYYY>` item, and summary items are never themselves reviewed. The agent's reasons are posted as quoted agent speech with brackets neutralised and URL schemes stripped, so they can never forge a `[bau:` marker.
+**Amended 14 Oct 2026 (implementation reviews):** the sweep runs at 00:15 on the first Sunday, before the night, and shares the run lock with it: the sweep waits up to 30 minutes for the lock, the night up to 60 (then records `stop_reason: locked`). Sweep sessions have their own 15-minute wall clock and no sweep session starts at or after 00:50, so the 01:00 night is never skipped. "Every active project" means every project in `projects.yaml` (now: every BAU-enabled project in ATC). Suppression is keyed on comments, not `updated_at`: an item the worker has suggested is not re-proposed until someone other than the worker comments on it. A `not-bau` label permanently excludes an item. A rerun in the same month reuses the open `Sweep <Month YYYY>` item, and summary items are never themselves reviewed. The agent's reasons are posted as quoted agent speech with brackets neutralised and URL schemes stripped, so they can never forge a `[bau:` marker.
 
 - Looks for: small, self-contained, well-specified items in eligible repos with no recent activity from Martin; items with no activity since the Taiga migration; duplicates; items a merged PR has already done. The spring-clean triage criteria form the prompt.
 - Does: comments "Suggested for BAU because …" on each candidate; creates one work item in `BAU` titled `Sweep <Month YYYY>` listing candidates by project with a one-line reason each. Martin labels the ones he agrees with.
-- Never: labels, closes, or changes the state of anything.
+- Never: labels, closes, or changes the state of anything. (Superseded 18 Oct 2026: the sweep now applies `BAU` or `not-bau` itself, with a `[bau:swept]` comment, and writes no summary item; see `2026-10-18-bau-questions-design.md`.)
 - Remembers (in Plane, via its own earlier comments) what it suggested before and skips unchanged items it suggested previously.
 
 ## 11. Failure handling and observability
 
 - One retry per failed session, with the failure in the brief; then comment and move on.
 - Preflight failure ends the night with a snapshot saying so.
-- Logs: one per session plus a run log under `/Users/bau/logs/`, rotated weekly. The run log is the `less +F` target.
+- Logs: one per session plus a run log under `~/Library/Logs/BAU/`, rotated weekly. The run log is the `less +F` target.
 - Alerting is BD-1 going red. No emails or Alexa at night.
-- `paused: true` in `config/bau.yaml` stops the worker at the next check without touching launchd. The dashboard shows the flag.
+- The pause file, `<BAU_HOME>/state/paused`, stops the worker at the next check without touching launchd. The dashboard shows the flag. (Originally `paused: true` in `config/bau.yaml`; the YAML key was removed by the packaging work, BAU-24, since the host config is no longer edited by hand.)
 
 ## 12. Security posture
 
-The agent runs with permissions bypassed, so the walls are around it rather than inside it: Linux container discarded per session (the host-side runner shares the `nakomis` login but is plain Python, never an agent); bare clones mounted read-only and no writable path shared between tickets; egress allow-list; one-hour installation token scoped to one repo; App permissions that exclude workflows, secrets and admin; branch protection on main enforced by GitHub; ticket text treated as untrusted data and only Martin's comments treated as instructions; no home-network hosts reachable. Package install scripts are a known hole in any egress allow-list that includes registries; pnpm 11 blocks them by default and the image sets `ignore-scripts` for npm and pip equivalents. Cere holds no state of record, so a rebuilt Cere with the repo and the credentials carries on.
+The agent runs with permissions bypassed, so the walls are around it rather than inside it: Linux container discarded per session (the host-side runner shares the `nakomis` login but is plain Python, never an agent); bare clones mounted read-only and no writable path shared between tickets; egress allow-list; one-hour installation token scoped to one repo; App permissions that exclude workflows, secrets and admin; branch protection on main enforced by GitHub; ticket text treated as untrusted data and only Martin's comments treated as instructions; no home-network hosts reachable. Package install scripts are a known hole in any egress allow-list that includes registries; pnpm 11 blocks them by default and the image sets `ignore-scripts` for npm and pip equivalents. Cere holds no state of record, so a rebuilt Cere with the playbook and the credentials carries on: the release is fetched, not cloned.
+
+## 12a. Deployment
+
+**Added 21 Oct 2026 (BAU-24; design in `2026-10-19-bau-packaging-design.md`).** BAU is no longer cloned and built on Cere.
+
+- **CI builds it.** On `main`, `.github/workflows/ci.yml` computes the version with the shared tracker action, builds a bundle (`bau-<version>.tar.gz`: the wheel with the dashboard packaged as `bau/web_dist`, a hashed `requirements.txt`, the launchd plist templates, `compose.yml`, `VERSION`, `SHA256SUMS`) and two `linux/arm64` images, `bau-agent` and `bau-egress`, tagged `<version>-<sha>` in `registry.home.nakomis.com/nakomis`. Images are pushed first, then the GitHub release `bau-v<version>` is created, then the `sandbox` (released) deployment is recorded.
+- **Ansible installs it.** The home-servers Cere play (tracked as BAU-25) installs the version pinned as `bau_version`, smoke-tests it, then flips `<BAU_HOME>/current` and reloads the three launchd jobs. The `bau-installed` workflow records `prod`. `BAU_HOME` is `~/Library/Application Support/BAU`.
+- **Config is split.** Policy lives in `bau/defaults.yaml` inside the wheel; host facts live in `<BAU_HOME>/config/host.yaml`, rendered by Ansible and deep-merged over the defaults. Nothing under `BAU_HOME` is a git checkout or hand-edited, apart from `state/paused`.
+- **Rollback** is setting `bau_version` back: the three newest releases are retained, so it needs no download or build.
+- `install.sh` is deleted, and the runbook's install steps now point at the play.
+- BAU's own ATC row is to be set to `deploys: true` with `deploy_action: "Bump bau_version in home-servers cere/ansible and run scripts/cere-ansible.sh --tags bau"`, so its merged PRs land on its own deploy list.
 
 ## 13. Testing and rollout
 
@@ -189,16 +200,16 @@ The agent runs with permissions bypassed, so the walls are around it rather than
 
 Each of these is created in the `BAU` Plane project once it exists, with the text below as its description.
 
-**Deploy auto-close from the deployment tracker.** The dashboard's deploy list closes rows by hand. For repos that record to the shared deployment tracker at `https://api.infra.nakomis.com` (DynamoDB `nakomis-deployments`, IAM-auth REST, `nakomis-infra`), the hourly snapshot should read the project's prod record and, when it includes the merge commit of a BAU PR, move the Plane item to Done with a comment, so approving the prod gate is the only manual step. Needs a read-only AWS identity on Cere: a Roles Anywhere profile backed by Cere's certificate (preferred, matching the home-infra pattern) or an access key in the `bau` keychain. Done when: a BAU PR merged to a tracked repo disappears from the deploy list within an hour of the prod deploy recording, with no manual Plane change. Out of scope: home-infra playbooks and local deploys, which have no tracker record (see the host-side verification ticket).
+**Deploy auto-close from the deployment tracker.** BAU is the first project tracked this way: its own installs are recorded as `bau`/`prod` by the `bau-installed` workflow (packaging spec section 3.5). The dashboard's deploy list closes rows by hand. For repos that record to the shared deployment tracker at `https://api.infra.nakomis.com` (DynamoDB `nakomis-deployments`, IAM-auth REST, `nakomis-infra`), the hourly snapshot should read the project's prod record and, when it includes the merge commit of a BAU PR, move the Plane item to Done with a comment, so approving the prod gate is the only manual step. Needs a read-only AWS identity on Cere: a Roles Anywhere profile backed by Cere's certificate (preferred, matching the home-infra pattern) or an access key in the `bau` keychain. Done when: a BAU PR merged to a tracked repo disappears from the deploy list within an hour of the prod deploy recording, with no manual Plane change. Out of scope: home-infra playbooks and local deploys, which have no tracker record (see the host-side verification ticket).
 
 **Build-only signal for draft PRs.** A label (`build-only`) or PR-body phrase that makes CI skip lint, tests and the rest and just produce the build, chiefly so the BAU agent can learn "does it compile" on the Apple repos before paying for the full pipeline. Needs the workflow change in each Apple repo and the runner to apply the label on the first push of an Apple-repo ticket and remove it before marking the PR ready.
 
 **Tart macOS VM per session.** If the container loop on Apple repos (edit, push, CI builds, fix) proves too slow, run those sessions in an ephemeral Tart VM cloned from a base image with Xcode, sharing the image with the Actions runner. Two-VM-per-Mac limit shared with the runner.
 
-**Host-side deploy verification.** For home-infra and local deploys, detect that the merge commit is live on the host (a version file, a container label, or a playbook marker) and close the deploy row automatically.
+**Host-side deploy verification.** (Partly superseded for BAU itself by the `bau`/`prod` install record, packaging spec section 3.5.) For home-infra and local deploys, detect that the merge commit is live on the host (a version file, a container label, or a playbook marker) and close the deploy row automatically.
 
 **Morning summary announcement.** An Alexa announcement of the night's summary at a civilised hour, via the alexa MCP, opt-in.
 
-**Per-project ceilings.** If the global ceiling of 50 proves lopsided, add a per-project cap in `projects.yaml`.
+**Per-project ceilings.** If the global ceiling of 50 proves lopsided, add a per-project cap in ATC's per-project settings (originally `projects.yaml`).
 
 **Approve and merge from the dashboard.** Explicitly out of scope now: the worker never merges. Revisit once trust is established.

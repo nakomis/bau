@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from bau import version as build
 from bau.abandon import (
     RUN_IN_PROGRESS,
     AlreadyAbandoned,
@@ -20,7 +21,7 @@ from bau.abandon import (
 )
 from bau.atc import AtcClient, AtcState, AtcUnavailable, load_atc_state
 from bau.checkout import Repos
-from bau.config import Config, KeychainRef, load_config, paused_reader
+from bau.config import Config, KeychainRef, bau_home, load_config, paused_reader
 from bau.github import GitHubApp, GitHubClient
 from bau.lock import run_lock
 from bau.markers import latest_asked
@@ -39,7 +40,6 @@ from bau.snapshot import (
     write_snapshot,
 )
 
-DEFAULT_CONFIG = Path("/Users/nakomis/bau/src/config")
 # Stop reasons that make up a normal night; anything else (or an exception) exits non-zero.
 NORMAL_STOP_REASONS = frozenset({"ok", "cutoff", "pace", "paused", "five-hour", "locked"})
 # How long each job waits for the shared run lock before giving up (seconds).
@@ -52,7 +52,7 @@ def exit_code(stop_reason: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="bau")
-    p.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    p.add_argument("--config", type=Path, default=bau_home() / "config")
     # Also accepted after the subcommand; SUPPRESS keeps the top-level value when it is absent.
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", type=Path, default=argparse.SUPPRESS)
@@ -66,6 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     ab = sub.add_parser("abandon", help="abandon a picked-up item", parents=[common])
     ab.add_argument("ref")
     ab.add_argument("--note", default="")
+    sub.add_parser("version", help="print the build version", parents=[common])
     return p
 
 
@@ -347,7 +348,7 @@ def _unwired(cfg: Config):
 
 
 def _run(args: argparse.Namespace, cfg: Config) -> int:
-    paused = paused_reader(args.config / "bau.yaml", cfg.paused, cfg.paths.pause_file)
+    paused = paused_reader(cfg.paths.pause_file)
     try:
         wired = wire(cfg, args.config)
     except AtcUnavailable as e:
@@ -389,16 +390,25 @@ def _locked_out(cfg: Config, args: argparse.Namespace) -> int:
     except AtcUnavailable:
         wired = _unwired(cfg)
     clock = wired[5]
-    paused = paused_reader(args.config / "bau.yaml", cfg.paused, cfg.paths.pause_file)
+    paused = paused_reader(cfg.paths.pause_file)
     # failed=True keeps the last known rows and touches no service: nothing ran tonight.
     _write_run_snapshot(cfg, wired, clock(), NightReport(), "locked", paused(), failed=True)
     return 0
 
 
+def _version() -> int:
+    print(f"bau {build.VERSION} ({build.GIT_SHA or 'unstamped'})")
+    return 0
+
+
 def _dispatch(args: argparse.Namespace) -> int:
-    cfg = load_config(args.config / "bau.yaml")
+    if args.command == "version":  # before load_config: needs no config file
+        return _version()
+    cfg = load_config(args.config)
     if args.command == "run":
-        with run_lock(cfg.paths.logs.parent / "run.lock", RUN_LOCK_WAIT) as held:
+        cfg.paths.lock.parent.mkdir(parents=True, exist_ok=True)
+        cfg.paths.logs.mkdir(parents=True, exist_ok=True)
+        with run_lock(cfg.paths.lock, RUN_LOCK_WAIT) as held:
             if not held:
                 return _locked_out(cfg, args)
             return _run(args, cfg)
@@ -417,7 +427,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         wired = wire_services(cfg, AtcState({}, {}, True))
     projects, plane, app, factory, repos, clock, _ = wired
     if args.command == "probe":
-        paused = paused_reader(args.config / "bau.yaml", cfg.paused, cfg.paths.pause_file)
+        paused = paused_reader(cfg.paths.pause_file)
         print(_night(args, cfg, wired, paused).probe())
         return 0
     if args.command == "snapshot":
@@ -429,7 +439,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         write_snapshot(
             cfg.paths.snapshot,
             build_snapshot(
-                paused=paused_reader(args.config / "bau.yaml", cfg.paused, cfg.paths.pause_file)(),
+                paused=paused_reader(cfg.paths.pause_file)(),
                 last_run=last,
                 latest=None,
                 open_prs=open_rows,
@@ -444,11 +454,10 @@ def _dispatch(args: argparse.Namespace) -> int:
         )
         return 0
     if args.command == "serve":
-        from bau.api import create_app, serve
+        from bau.api import create_app, serve, static_dir
 
-        static_dir = Path(args.config).parent / "web" / "dist"
         token = read_secret(KeychainRef("bau", "proxy-token"))
-        serve(create_app(cfg, projects, plane, factory, repos, static_dir, token), args.port)
+        serve(create_app(cfg, projects, plane, factory, repos, static_dir(), token), args.port)
         return 0
     if args.command == "abandon":
         return _abandon(args, cfg, wired)
@@ -467,7 +476,7 @@ def _abandon(args: argparse.Namespace, cfg: Config, wired) -> int:
             worker_login=cfg.identities.worker_github_login,
             worker_email=cfg.identities.worker_plane_email,
             note=args.note,
-            lock_path=cfg.paths.logs.parent / "run.lock",
+            lock_path=cfg.paths.lock,
         )
     except (InvalidRef, UnknownProject) as e:
         print(e)

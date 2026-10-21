@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import time
+from importlib import resources
 from pathlib import Path
 
 import yaml
+
+from bau.version import image_tag
 
 
 @dataclass(frozen=True)
@@ -101,6 +105,7 @@ class Paths:
     snapshot: Path
     pause_file: Path
     atc_cache: Path
+    lock: Path
 
 
 @dataclass(frozen=True)
@@ -112,7 +117,6 @@ class Container:
 
 @dataclass(frozen=True)
 class Config:
-    paused: bool
     schedule: Schedule
     limits: Limits
     models: Models
@@ -138,8 +142,16 @@ def _keychain(d: dict) -> KeychainRef:
     return KeychainRef(service=d["service"], account=d["account"])
 
 
+def bau_home() -> Path:
+    """`$BAU_HOME`, expanded, else the macOS application-support directory."""
+    env = os.environ.get("BAU_HOME")
+    return Path(env).expanduser() if env else Path("~/Library/Application Support/BAU").expanduser()
+
+
 def _path(value: str | None) -> Path | None:
-    return Path(value).expanduser() if value else None
+    if not value:
+        return None
+    return Path(value.replace("${BAU_HOME}", str(bau_home()))).expanduser()
 
 
 def _time(value: str) -> time:
@@ -147,10 +159,38 @@ def _time(value: str) -> time:
     return time(int(hours), int(minutes))
 
 
-def load_config(path: Path) -> Config:
-    raw = yaml.safe_load(Path(path).read_text())
+def _merge(base: dict, over: dict) -> dict:
+    """Dicts merge recursively; any other value in `over` replaces."""
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def _default_image() -> str:
+    tag = image_tag()
+    return f"registry.home.nakomis.com/nakomis/bau-agent:{tag}" if tag else "bau-agent:latest"
+
+
+def load_config(config_dir: Path) -> Config:
+    """The packaged defaults, overlaid with `config_dir/host.yaml` when it exists."""
+    raw = yaml.safe_load((resources.files("bau") / "defaults.yaml").read_text())
+    host = Path(config_dir) / "host.yaml"
+    if host.exists():
+        overlay = yaml.safe_load(host.read_text())
+        if overlay is None:
+            overlay = {}
+        if not isinstance(overlay, dict):
+            raise ValueError(f"{host}: top level must be a mapping, not {type(overlay).__name__}")
+        unknown = sorted(set(overlay) - set(raw))
+        if unknown:
+            raise ValueError(f"{host}: unknown top-level key(s) not in defaults.yaml: {', '.join(unknown)}")
+        for key, value in overlay.items():
+            if isinstance(raw[key], dict) and not isinstance(value, dict):
+                raise ValueError(f"{host}: '{key}' must be a mapping, not {type(value).__name__}")
+        raw = _merge(raw, overlay)
+    raw["container"].setdefault("image", _default_image())
     return Config(
-        paused=raw["paused"] is True,
         schedule=Schedule(
             _time(raw["schedule"]["no_new_sessions_after"]),
             raw["schedule"]["timezone"],
@@ -171,38 +211,24 @@ def load_config(path: Path) -> Config:
             client_key=_path(raw["plane"].get("client_key")),
         ),
         claude=ClaudeConfig(oauth_token=_keychain(raw["claude"]["oauth_token"])),
-        paths=Paths(**{k: Path(v).expanduser() for k, v in raw["paths"].items()}),
+        paths=Paths(**{k: _path(v) for k, v in raw["paths"].items()}),
         container=Container(**raw["container"]),
         nudge=Nudge(**raw["nudge"]),
         atc=AtcConfig(url=raw["atc"]["url"].rstrip("/")),
     )
 
 
-def paused_reader(path: Path, initial: bool, pause_file: Path) -> Callable[[], bool]:
-    """Re-read the pause sources, so a pause takes effect before the next session. Paused when
-    `pause_file` exists (its contents, if any, are the reason, logged to stderr once per change)
-    or when `bau.yaml` holds a literal YAML `true`; a YAML file that will not parse keeps the last
-    value seen."""
-    last = [initial]
+def paused_reader(pause_file: Path) -> Callable[[], bool]:
+    """Re-read the pause file, so a pause takes effect before the next session. Paused when
+    `pause_file` exists; its contents, if any, are the reason, logged to stderr once per change."""
     logged: list[str | None] = [None]
 
-    def read_yaml() -> bool:
-        try:
-            raw = yaml.safe_load(Path(path).read_text())
-        except (OSError, yaml.YAMLError):
-            return last[0]
-        if not isinstance(raw, dict):
-            return last[0]
-        last[0] = raw.get("paused") is True
-        return last[0]
-
     def read() -> bool:
-        from_yaml = read_yaml()
         try:
             reason = Path(pause_file).read_text(errors="replace").strip()
         except FileNotFoundError:
             logged[0] = None
-            return from_yaml
+            return False
         except OSError:
             reason = "(unreadable)"
         if reason != logged[0]:
@@ -211,11 +237,3 @@ def paused_reader(path: Path, initial: bool, pause_file: Path) -> Callable[[], b
         return True
 
     return read
-
-
-def load_projects(path: Path) -> dict[str, ProjectConfig]:
-    raw = yaml.safe_load(Path(path).read_text())["projects"]
-    return {
-        ident: ProjectConfig(ident, p.get("repo"), bool(p.get("deploys", False)), p.get("deploy_action", ""))
-        for ident, p in raw.items()
-    }

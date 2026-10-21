@@ -3,7 +3,7 @@
 <plist version="1.0"><dict>
   <key>Label</key><string>com.nakomis.bau-snapshot</string>
   <key>ProgramArguments</key><array>
-    <string>/Users/nakomis/bau/src/.venv/bin/bau</string><string>snapshot</string>
+    <string>@BAU_HOME@/current/venv/bin/bau</string><string>snapshot</string>
   </array>
   <key>StartCalendarInterval</key><array>
     <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
@@ -24,11 +24,12 @@
     <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>30</integer></dict>
     <dict><key>Hour</key><integer>23</integer><key>Minute</key><integer>30</integer></dict>
   </array>
-  <key>StandardOutPath</key><string>/Users/nakomis/bau/logs/bau-snapshot.log</string>
-  <key>StandardErrorPath</key><string>/Users/nakomis/bau/logs/bau-snapshot.log</string>
+  <key>StandardOutPath</key><string>@HOME@/Library/Logs/BAU/bau-snapshot.log</string>
+  <key>StandardErrorPath</key><string>@HOME@/Library/Logs/BAU/bau-snapshot.log</string>
   <key>EnvironmentVariables</key><dict>
-    <key>PATH</key><string>/Users/nakomis/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-    <key>DOCKER_HOST</key><string>unix:///Users/nakomis/.colima/default/docker.sock</string>
+    <key>PATH</key><string>@HOME@/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>DOCKER_HOST</key><string>unix://@HOME@/.colima/default/docker.sock</string>
+    <key>BAU_HOME</key><string>@BAU_HOME@</string>
     <key>PYTHONUNBUFFERED</key><string>1</string>
   </dict>
 </dict></plist>

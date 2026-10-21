@@ -53,4 +53,14 @@ describe('Footer', () => {
     render(<Footer />);
     expect(screen.getByText('Nakomis BAU')).toBeInTheDocument();
   });
+
+  it('shows the version from state.json', () => {
+    render(<Footer version={{ version: '0.4.2', sha: 'abc1234' }} />);
+    expect(screen.getByText('Nakomis BAU 0.4.2 (abc1234)')).toBeInTheDocument();
+  });
+
+  it('shows just the name before state.json arrives', () => {
+    render(<Footer />);
+    expect(screen.getByText('Nakomis BAU')).toBeInTheDocument();
+  });
 });

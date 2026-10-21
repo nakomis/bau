@@ -1,0 +1,19 @@
+# Copy to $BAU_HOME/config/host.yaml (Ansible renders it). Everything here is an optional
+# override of bau/defaults.yaml; any top-level key must exist in the defaults.
+# ${BAU_HOME} and ~ are expanded in paths.* and the plane client certificate paths.
+#
+# plane:
+#   client_cert: ${BAU_HOME}/config/cere.crt.pem
+#   client_key: ${BAU_HOME}/config/cere.key.pem
+#
+# paths:
+#   repos: ${BAU_HOME}/repos
+#   work: ${BAU_HOME}/work
+#   logs: ~/Library/Logs/BAU
+#   snapshot: ${BAU_HOME}/state/state.json
+#   pause_file: ${BAU_HOME}/state/paused
+#   atc_cache: ${BAU_HOME}/state/atc-cache.json
+#   lock: ${BAU_HOME}/state/run.lock
+#
+# container:
+#   image: bau-agent:dev   # normally derived from the build stamp

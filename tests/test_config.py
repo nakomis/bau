@@ -3,120 +3,107 @@ from pathlib import Path
 
 import pytest
 
-from bau.config import AtcConfig, Limits, Nudge, ProjectConfig, load_config, load_projects, paused_reader
-
-MINIMAL = """
-paused: false
-schedule: {no_new_sessions_after: "05:00", timezone: Europe/London}
-limits: {pace_margin: 0.10, five_hour_kill: 0.80,
-         session_wall_clock_minutes: 60, session_budget_usd: 5.0,
-         fail_closed_sessions: 2, ci_fix_sessions_per_pr: 3,
-         too_big_files: 15, too_big_lines: 400,
-         sweep_session_wall_clock_minutes: 15, triage_budget_usd: 1.25,
-         triage_wall_clock_minutes: 10, max_question_rounds: 4,
-         sweep_owner_quiet_days: 7, sweep_batch_items: 40,
-         max_triage_failures: 2}
-nudge: {prs_warn_count: 5, prs_warn_days: 5, prs_down_count: 10, prs_down_days: 14,
-        questions_warn_count: 5, questions_warn_days: 3, questions_down_count: 10,
-        questions_down_days: 7}
-models: {default: claude-opus-5-5, fable: claude-fable-5-1, fable_label: BAU-fable}
-identities: {github_login: nakomis, owner_plane_email: martin@nakomis.com,
-             worker_plane_email: bau@nakomis.com, worker_github_login: "nakomis-bau[bot]"}
-github_app: {app_id: 12345, installation_id: 67890,
-             private_key: {service: bau, account: github-app-key}}
-plane: {url: https://plane.home.nakomis.com, workspace: nakomis,
-        api_key: {service: bau, account: plane-api-key},
-        client_cert: ~/.config/bau/cere.crt.pem, client_key: ~/.config/bau/cere.key.pem}
-claude: {oauth_token: {service: bau, account: claude-oauth-token}}
-paths: {repos: /Users/nakomis/bau/repos, work: /Users/nakomis/bau/work,
-        logs: /Users/nakomis/bau/logs, snapshot: /Users/nakomis/bau/state.json,
-        pause_file: /Users/nakomis/bau/paused, atc_cache: /Users/nakomis/bau/atc-cache.json}
-atc: {url: https://atc.plane.home.nakomis.com/}
-container: {image: bau-agent:latest, network: bau-net, proxy: http://bau-egress:8888}
-"""
+import bau
+from bau.config import AtcConfig, Limits, Nudge, bau_home, load_config, paused_reader
 
 
-def test_loads_every_section(tmp_path: Path):
-    p = tmp_path / "bau.yaml"
-    p.write_text(MINIMAL)
-    cfg = load_config(p)
-    assert cfg.paused is False
+def test_bau_home_is_the_env_var_expanded_else_application_support(tmp_path, monkeypatch):
+    monkeypatch.setenv("BAU_HOME", "~/somewhere")
+    assert bau_home() == Path("~/somewhere").expanduser()
+    monkeypatch.delenv("BAU_HOME")
+    assert bau_home() == Path("~/Library/Application Support/BAU").expanduser()
+
+
+def test_loads_every_section(tmp_path: Path, monkeypatch):
+    home = tmp_path / "bau-home"
+    cfg = load_config(tmp_path)
+    assert not hasattr(cfg, "paused")
     assert cfg.schedule.no_new_sessions_after == time(5, 0)
-    assert cfg.limits.sweep_session_wall_clock_minutes == 15
     assert cfg.limits == Limits(0.10, 0.80, 60, 5.0, 2, 3, 15, 400, 15, 1.25, 10, 4, 7, 40, 2)
+    assert cfg.nudge == Nudge(5, 5, 10, 14, 5, 3, 10, 7)
     assert cfg.models.fable_label == "BAU-fable"
     assert cfg.github_app.private_key.account == "github-app-key"
-    assert cfg.plane.client_cert == Path("~/.config/bau/cere.crt.pem").expanduser()
-    assert cfg.paths.snapshot == Path("/Users/nakomis/bau/state.json")
-    assert cfg.paths.pause_file == Path("/Users/nakomis/bau/paused")
+    assert cfg.plane.client_cert == home / "config" / "cere.crt.pem"
+    assert cfg.plane.client_key == home / "config" / "cere.key.pem"
+    assert cfg.paths.pause_file == home / "state" / "paused"
+    assert cfg.paths.atc_cache == home / "state" / "atc-cache.json"
+    assert cfg.paths.repos == home / "repos" and cfg.paths.work == home / "work"
     assert cfg.container.proxy == "http://bau-egress:8888"
     assert cfg.atc == AtcConfig("https://atc.plane.home.nakomis.com")
-    assert cfg.paths.atc_cache == Path("/Users/nakomis/bau/atc-cache.json")
 
 
-def test_load_config_reads_nudge_and_new_limits(tmp_path: Path):
-    p = tmp_path / "bau.yaml"
-    p.write_text(MINIMAL)
-    cfg = load_config(p)
-    assert cfg.nudge == Nudge(5, 5, 10, 14, 5, 3, 10, 7)
-    assert cfg.nudge.questions_warn_days == 3
-    assert cfg.limits.max_question_rounds == 4
-    assert cfg.limits.triage_budget_usd == 1.25
-    assert not hasattr(cfg.limits, "open_pr_ceiling")
+@pytest.mark.parametrize("text", ["- a\n- b\n", "just a string\n"])
+def test_host_yaml_top_level_must_be_a_mapping(tmp_path, text):
+    (tmp_path / "host.yaml").write_text(text)
+    with pytest.raises(ValueError, match="top level must be a mapping"):
+        load_config(tmp_path)
 
 
-def test_load_projects_allows_null_repo(tmp_path: Path):
-    p = tmp_path / "projects.yaml"
-    p.write_text("projects:\n  NOREPO: {repo: null, deploys: false}\n")
-    assert load_projects(p)["NOREPO"].repo is None
+def test_empty_host_yaml_is_fine(tmp_path):
+    (tmp_path / "host.yaml").write_text("")
+    load_config(tmp_path)
 
 
-def test_missing_section_is_an_error(tmp_path: Path):
-    p = tmp_path / "bau.yaml"
-    p.write_text("paused: false\n")
-    with pytest.raises(KeyError):
-        load_config(p)
+def test_host_yaml_section_must_stay_a_mapping(tmp_path):
+    (tmp_path / "host.yaml").write_text("paths:\n")
+    with pytest.raises(ValueError, match="'paths' must be a mapping"):
+        load_config(tmp_path)
 
 
-def test_projects_map_identifier_to_repo(tmp_path: Path):
-    p = tmp_path / "projects.yaml"
-    p.write_text(
-        "projects:\n"
-        "  HOME: {repo: nakomis/home-infra, deploys: true, deploy_action: 'Run the playbook'}\n"
-        "  BAU: {repo: nakomis/bau, deploys: false}\n"
+def test_defaults_alone_load(tmp_path, monkeypatch):
+    monkeypatch.setenv("BAU_HOME", str(tmp_path / "Application Support" / "BAU"))
+    cfg = load_config(tmp_path)  # no host.yaml
+    assert cfg.paths.snapshot == tmp_path / "Application Support" / "BAU" / "state" / "state.json"
+    assert cfg.paths.lock.name == "run.lock" and cfg.paths.lock.parent == cfg.paths.snapshot.parent
+    assert cfg.paths.logs == Path("~/Library/Logs/BAU").expanduser()
+
+
+def test_overlay_merges_nested_keys(tmp_path):
+    (tmp_path / "host.yaml").write_text("limits:\n  session_budget_usd: 9.5\n")
+    cfg = load_config(tmp_path)
+    assert cfg.limits.session_budget_usd == 9.5
+    assert cfg.limits.too_big_files == 15  # sibling kept from the defaults
+
+
+def test_overlay_paths_expand_bau_home_and_tilde(tmp_path):
+    (tmp_path / "host.yaml").write_text(
+        "paths:\n  repos: ${BAU_HOME}/elsewhere\n  work: ~/w\nplane:\n  client_cert: ${BAU_HOME}/c.pem\n"
     )
-    projects = load_projects(p)
-    assert projects["HOME"] == ProjectConfig("HOME", "nakomis/home-infra", True, "Run the playbook")
-    assert projects["BAU"].deploy_action == ""
+    cfg = load_config(tmp_path)
+    assert cfg.paths.repos == bau_home() / "elsewhere"
+    assert cfg.paths.work == Path("~/w").expanduser()
+    assert cfg.plane.client_cert == bau_home() / "c.pem"
+    assert cfg.paths.snapshot == bau_home() / "state" / "state.json"  # sibling kept
 
 
-@pytest.mark.parametrize("value,expected", [("true", True), ("false", False), ('"yes"', False), ("1", False)])
-def test_paused_is_only_a_literal_yaml_true(tmp_path: Path, value, expected):
-    p = tmp_path / "bau.yaml"
-    p.write_text(MINIMAL.replace("paused: false", f"paused: {value}"))
-    assert load_config(p).paused is expected
+def test_unknown_host_key_is_an_error(tmp_path):
+    (tmp_path / "host.yaml").write_text("pathz:\n  repos: /x\n")
+    with pytest.raises(ValueError, match="pathz"):
+        load_config(tmp_path)
 
 
-def test_paused_reader_rereads_the_flag_and_keeps_the_last_value_on_a_bad_file(tmp_path: Path):
-    p = tmp_path / "bau.yaml"
-    p.write_text(MINIMAL)
-    read = paused_reader(p, initial=False, pause_file=tmp_path / "paused")
-    assert read() is False
-    p.write_text(MINIMAL.replace("paused: false", "paused: true"))
-    assert read() is True
-    p.write_text("paused: [unclosed\n")
-    assert read() is True
-    p.write_text(MINIMAL.replace("paused: false", "paused: 'true'"))
-    assert read() is False
-    p.unlink()
-    assert read() is False
+def test_container_image_follows_the_build_stamp(tmp_path, monkeypatch):
+    monkeypatch.setattr("bau.config.image_tag", lambda: "0.4.2-abc1234")
+    assert (
+        load_config(tmp_path).container.image == "registry.home.nakomis.com/nakomis/bau-agent:0.4.2-abc1234"
+    )
+    monkeypatch.setattr("bau.config.image_tag", lambda: None)
+    assert load_config(tmp_path).container.image == "bau-agent:latest"
 
 
-def test_paused_reader_treats_the_pause_file_as_paused_and_logs_its_reason(tmp_path: Path, capsys):
-    p = tmp_path / "bau.yaml"
-    p.write_text(MINIMAL)
+def test_host_yaml_may_override_the_image(tmp_path):
+    (tmp_path / "host.yaml").write_text("container:\n  image: bau-agent:dev\n")
+    assert load_config(tmp_path).container.image == "bau-agent:dev"
+
+
+def test_nothing_shipped_names_a_home_directory():
+    text = (Path(bau.__file__).parent / "defaults.yaml").read_text()
+    assert "/Users/" not in text and "paused:" not in text
+
+
+def test_paused_reader_is_the_pause_file_only(tmp_path: Path, capsys):
     flag = tmp_path / "paused"
-    read = paused_reader(p, initial=False, pause_file=flag)
+    read = paused_reader(flag)
     assert read() is False
     flag.write_text("away until Monday\n")
     assert read() is True
@@ -129,76 +116,7 @@ def test_paused_reader_treats_the_pause_file_as_paused_and_logs_its_reason(tmp_p
     assert read() is False
 
 
-def test_paused_reader_pauses_on_either_source(tmp_path: Path):
-    p = tmp_path / "bau.yaml"
-    p.write_text(MINIMAL.replace("paused: false", "paused: true"))
-    flag = tmp_path / "paused"
-    read = paused_reader(p, initial=False, pause_file=flag)
-    assert read() is True
-    flag.touch()
-    p.write_text(MINIMAL)
-    assert read() is True
-    flag.unlink()
-    assert read() is False
-
-
-CODE_PROJECTS = {
-    "ADMIN": "nakom-admin",
-    "BAPP": "blog-app",
-    "BOOT": "bootboots",
-    "CHATS": "claude-chats",
-    "CLOUD": "nakomis-infra",
-    "CRYPT": "tinycrypt",
-    "CSSC": "cdk-ssm-secret-checker",
-    "CTHU": "cthulhu",
-    "EYE": "mcps",
-    "FLEET": "nakomis-fleet",
-    "HAND": "handmade-intelligence",
-    "KAPPA": "kappa-warmer",
-    "KBRD": "mechanical-keyboard",
-    "LAPC": "lapcat",
-    "LIGHT": "lightning",
-    "MUSH": "mushroom-humidor",
-    "NAKIS": "nakom.is",
-    "NAKTV": "naktv",
-    "NDFM": "nakomis-dragonfruit-mcp",
-    "PIOE": "epio",
-    "PIPE": "blog-pipeline",
-    "PISH": "pish",
-    "PLAY": "playlist",
-    "RECIP": "recipator",
-    "SCHIM": "schimmelpfennig",
-    "SCOPE": "nakoscope",
-    "SCRUM": "nakomis-scrum",
-    "SINT": "sinter",
-    "STAT": "nakostat",
-    "TVRM": "tv-remote",
-}
-
-
-def test_projects_yaml_covers_every_code_project():
-    projects = load_projects(Path(__file__).parent.parent / "config" / "projects.yaml")
-    assert {"BAU", "HOME"} <= projects.keys()
-    for ident, repo in CODE_PROJECTS.items():
-        assert projects[ident].repo == f"nakomis/{repo}", ident
-    assert projects["PROJ"].repo is None
-    assert projects["MULTI"].repo is None
-    assert not {"BCON", "HARM", "MONEY", "BENCH"} & projects.keys()
-    for p in projects.values():
-        assert p.deploy_action if p.deploys else True, p.identifier
-
-
-def test_projects_yaml_deploys_flags_match_the_workflows():
-    projects = load_projects(Path(__file__).parent.parent / "config" / "projects.yaml")
-    for ident in ("NAKIS", "SCRUM", "BAPP", "CRYPT", "RECIP", "HOME"):
-        assert projects[ident].deploys, ident
-    for ident in ("CTHU", "PISH", "BAU"):
-        assert not projects[ident].deploys, ident
-    assert "promote" in projects["BAPP"].deploy_action
-    assert projects["SCRUM"].deploy_action == "Run the promote-prod workflow in GitHub Actions"
-
-
-def test_real_bau_yaml_points_at_atc():
-    cfg = load_config(Path(__file__).parent.parent / "config" / "bau.yaml")
+def test_real_defaults_point_at_atc():
+    cfg = load_config(Path(__file__).parent.parent / "config")
     assert cfg.atc.url == "https://atc.plane.home.nakomis.com"
-    assert cfg.paths.atc_cache == Path("/Users/nakomis/bau/atc-cache.json")
+    assert cfg.paths.atc_cache == bau_home() / "state" / "atc-cache.json"
