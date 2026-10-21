@@ -1,6 +1,6 @@
 # BAU packaging and installation (BAU-24)
 
-Status: draft for Martin's review, 19 Oct 2026. Nothing here is implemented.
+Status: accepted 21 Oct 2026; phases 1 and 2 implemented by `docs/superpowers/plans/2026-10-21-bau-packaging.md`.
 Amends section 3 (components), section 12 (hardening) and the deployment
 notes of `2026-10-14-bau-design.md`; see "Changes to the existing spec" below.
 
@@ -64,7 +64,7 @@ unit. The release carries a **bundle**, `bau-<version>.tar.gz`, containing:
 |---|---|
 | `bau-<version>-py3-none-any.whl` | The `bau` package, with `web/dist` force-included as package data (`bau/web_dist/`), and `config/bau.yaml` as `bau/defaults.yaml` |
 | `requirements.txt` | `uv export --frozen --no-dev --hashes`: every dependency pinned and hashed from `uv.lock`, so Cere installs exactly what CI tested |
-| `launchd/*.plist.in` | The four job definitions with `@BAU_HOME@` and `@HOME@` placeholders (section 4.3) |
+| `launchd/*.plist.in` | The three job definitions with `@BAU_HOME@` and `@HOME@` placeholders (section 4.3) |
 | `compose.yml` | The egress proxy compose file, image tags taken from `.env` |
 | `VERSION`, `SHA256SUMS` | Version, and checksums of the above |
 
@@ -222,10 +222,12 @@ expands `~`), so no absolute `/Users/nakomis` remains in anything shipped.
 
 ### 4.3 launchd
 
-The plist templates (`@BAU_HOME@`, `@HOME@`) are in the bundle, versioned with
+There are three jobs, `bau-run`, `bau-snapshot` and `bau-api`; the monthly
+`bau-sweep` job no longer exists (the sweep is a step of the night). The plist
+templates (`@BAU_HOME@`, `@HOME@`) are in the bundle, versioned with
 the code, so schedule changes roll back with it. Ansible renders them
 (a plain `replace`, not logic) into `~/Library/LaunchAgents`. Log paths move
-to `~/Library/Logs/BAU`. The old `bau-sweep` clean-up that `install.sh` does is
+to `~/Library/Logs/BAU`. The old `bau-sweep` clean-up that `install.sh` did is
 carried by the play's migration step (section 5).
 
 ## 5. Migration from the checkout install
@@ -233,7 +235,7 @@ carried by the play's migration step (section 5).
 Once, in the same play, guarded by `~/bau/src` existing:
 
 1. Hold gate as above.
-2. `launchctl bootout` the four jobs; move `~/bau/{repos,work,logs}` and
+2. `launchctl bootout` the jobs (including any leftover `bau-sweep`); move `~/bau/{repos,work,logs}` and
    `state.json`, `atc-cache.json`, `paused` into the new tree; move
    `~/.config/bau/cere.*.pem`.
 3. Install the pinned release and load the jobs.
@@ -300,9 +302,11 @@ install.sh steps, `cere/CLAUDE.md` and the BAU part of
    `bau-installed` workflow.
 3. In home-servers: the Ansible install, migration and rollback tasks; pin
    `bau_version`; first release installed by hand with `-e bau_force=true`.
-4. Retire `install.sh`, `~/bau/src.retired`; update the spec and docs.
+4. Retire `~/bau/src.retired`; update the home-servers docs. (Partly done: `install.sh` was deleted in the phase 1-2 PR, and the spec and bau docs were updated there.)
 
 ## 10. Open questions for Martin
+
+All recommendations accepted (21 Oct 2026). The questions are kept as the record.
 
 1. **Where does the host bundle live: GitHub release or Nexus `artefacts-raw`?**
    Recommend the GitHub release. The repo is public, BD-1 does it that way and

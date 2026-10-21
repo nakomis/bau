@@ -16,6 +16,7 @@ If you find this useful, please consider buying me a coffee:
 - [How it runs](#how-it-runs)
 - [Repository layout](#repository-layout)
 - [Install on Cere](#install-on-cere)
+- [Development](#development)
 - [Architecture Diagram](#architecture-diagram)
 - [Architecture Diagrams](#architecture-diagrams)
 - [Support](#support)
@@ -49,14 +50,24 @@ cut-off, and per-session budget and wall-clock limits, so the worker never eats 
 |------|---------|
 | `bau/` | Host-side Python: policy, Plane and GitHub clients, the nightly loop, the CLI |
 | `container/` | The agent image and the egress allow-list proxy |
-| `config/` | `bau.yaml` (policy and paths) and `projects.yaml` (Plane project to repo map) |
-| `launchd/` | The scheduled jobs |
+| `config/` | `host.example.yaml`, documenting the per-host overlay (policy is in `bau/defaults.yaml`, packaged in the wheel) |
+| `scripts/` | `build-bundle.sh`, which builds the release bundle |
+| `launchd/` | The scheduled job templates (`.plist.in`) |
 | `web/` | The dashboard (Vite + React), served at `https://bau.home.nakomis.com/` once Cere is wired (HOME-445); see `docs/runbook.md` |
 | `docs/` | Spec, plans, runbook, architecture diagram |
 
 ## Install on Cere
 
-See `docs/runbook.md`. In short: three keychain items, `git clone` to `~/bau/src`, `./install.sh`.
+CI builds each release: a bundle (`bau-<version>.tar.gz`: wheel, hashed requirements, launchd templates, compose file) published as the GitHub release `bau-v<version>`, and two `linux/arm64` images pushed to `registry.home.nakomis.com`. Cere installs a pinned version through the home-servers Ansible play (BAU-25; `bau_version` in `cere/ansible`). See `docs/runbook.md` for the layout, keychain items, upgrade and rollback.
+
+## Development
+
+```bash
+uv sync
+cp config/host.example.yaml config/host.yaml   # gitignored; uncomment what you need
+uv run bau --config config/ run --dry-run
+uv run pytest
+```
 
 ## Architecture Diagram
 
