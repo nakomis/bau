@@ -99,7 +99,7 @@ def create_app(
     def state():
         snap = read_snapshot(cfg.paths.snapshot)
         body = dict(snap) if snap is not None else {"schema": 1, "missing": True}
-        body["version"] = {"version": bau.version.VERSION, "sha": bau.version.GIT_SHA}
+        body["version"] = {"version": bau.version.VERSION, "sha": bau.version.GIT_SHA or "unstamped"}
         return JSONResponse(
             body,
             headers={"Cache-Control": "no-store"},

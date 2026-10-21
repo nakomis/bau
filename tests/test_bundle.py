@@ -69,6 +69,13 @@ def test_bundle_installs_and_reports_its_version(tmp_path):
         )
     } <= names
     assert {n.split("/")[0] for n in names} == {"bau-9.9.9"}
+    # every launchd template in the repo is bundled, and nothing else
+    bundled = {
+        n.removeprefix("bau-9.9.9/launchd/")
+        for n in names
+        if n.startswith("bau-9.9.9/launchd/") and not n.endswith("/")
+    }
+    assert bundled == {p.name for p in (REPO / "launchd").glob("*.plist.in")}
     # SHA256SUMS covers every other file, and nothing stray (such as uv's .gitignore) is bundled
     files = {m.name.removeprefix("bau-9.9.9/") for m in members if m.isfile()}
     listed = {line.split("  ", 1)[1] for line in (d / "SHA256SUMS").read_text().splitlines()}

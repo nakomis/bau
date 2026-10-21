@@ -275,3 +275,12 @@ def test_state_json_carries_the_version(cfg, tmp_path, monkeypatch):
     cfg.paths.snapshot.write_text(json.dumps({"schema": 1, "open_prs": []}))
     assert c.get("/state.json").json()["version"] == expected
     assert "version" not in json.loads(cfg.paths.snapshot.read_text())
+
+
+def test_state_json_marks_an_unstamped_build(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(bau.version, "VERSION", "0.0.0+local")
+    monkeypatch.setattr(bau.version, "GIT_SHA", "")
+    assert client(cfg, tmp_path).get("/state.json").json()["version"] == {
+        "version": "0.0.0+local",
+        "sha": "unstamped",
+    }

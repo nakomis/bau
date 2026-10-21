@@ -177,10 +177,17 @@ def load_config(config_dir: Path) -> Config:
     raw = yaml.safe_load((resources.files("bau") / "defaults.yaml").read_text())
     host = Path(config_dir) / "host.yaml"
     if host.exists():
-        overlay = yaml.safe_load(host.read_text()) or {}
+        overlay = yaml.safe_load(host.read_text())
+        if overlay is None:
+            overlay = {}
+        if not isinstance(overlay, dict):
+            raise ValueError(f"{host}: top level must be a mapping, not {type(overlay).__name__}")
         unknown = sorted(set(overlay) - set(raw))
         if unknown:
             raise ValueError(f"{host}: unknown top-level key(s) not in defaults.yaml: {', '.join(unknown)}")
+        for key, value in overlay.items():
+            if isinstance(raw[key], dict) and not isinstance(value, dict):
+                raise ValueError(f"{host}: '{key}' must be a mapping, not {type(value).__name__}")
         raw = _merge(raw, overlay)
     raw["container"].setdefault("image", _default_image())
     return Config(

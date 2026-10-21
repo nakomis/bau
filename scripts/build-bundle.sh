@@ -61,7 +61,7 @@ wheel="bau-$version-py3-none-any.whl"
 # 5. hashed runtime requirements
 (cd "$src" && uv export --frozen --no-dev --no-emit-project --hashes) >"$bundle/requirements.txt"
 
-cp "$repo"/launchd/com.nakomis.bau-{run,snapshot,api}.plist.in "$bundle/launchd/"
+cp "$repo"/launchd/*.plist.in "$bundle/launchd/"
 cp "$repo/container/compose.yml" "$bundle/compose.yml"
 
 cat >"$bundle/INSTALL" <<INSTALL_EOF

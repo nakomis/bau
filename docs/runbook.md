@@ -14,7 +14,7 @@ No `pnpm`, Node or `docker build` is needed on Cere: CI builds the dashboard, th
 
 > Target layout, built by BAU-25; Cere is still on the checkout install until then.
 
-`BAU_HOME` defaults to `~/Library/Application Support/BAU` (the path has a space; the plists and compose file quote it). Nothing under it is a git repository, and nothing is edited by hand except `state/paused`.
+`BAU_HOME` defaults to `~/Library/Application Support/BAU` (the path has a space; arguments containing it are passed whole, as argv or plist strings, never through a shell). Nothing under it is a git repository, and nothing is edited by hand except `state/paused`.
 
 | Path | Contents |
 |------|----------|
@@ -112,7 +112,7 @@ echo "away until Monday" > "$HOME/Library/Application Support/BAU/state/paused" 
 rm "$HOME/Library/Application Support/BAU/state/paused"                          # resume
 ```
 
-While `state/paused` (`paths.pause_file`) exists, policy refuses to start new sessions. Its contents, if any, are the reason; `bau` logs it to stderr (the run log) when it first sees the pause. This file is the only pause switch: there is no `paused` key in the YAML, and the dashboard writes the same file.
+While `state/paused` (`paths.pause_file`) exists, policy refuses to start new sessions. Its contents, if any, are the reason; `bau` logs it to stderr (the run log) when it first sees the pause. This file is the only pause switch: there is no `paused` key in the YAML, and the dashboard only shows it (`paused` in the snapshot). Martin touches the file, and removes it to resume.
 
 A running `bau run` re-reads the pause file before every session, so a pause takes effect before the next session starts; a session already in progress runs to its end. Merged PRs are still closed out and green drafts still marked ready while paused, since neither starts a session. For an immediate stop, see "Stop a run now".
 

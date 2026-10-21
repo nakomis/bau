@@ -32,6 +32,24 @@ def test_loads_every_section(tmp_path: Path, monkeypatch):
     assert cfg.atc == AtcConfig("https://atc.plane.home.nakomis.com")
 
 
+@pytest.mark.parametrize("text", ["- a\n- b\n", "just a string\n"])
+def test_host_yaml_top_level_must_be_a_mapping(tmp_path, text):
+    (tmp_path / "host.yaml").write_text(text)
+    with pytest.raises(ValueError, match="top level must be a mapping"):
+        load_config(tmp_path)
+
+
+def test_empty_host_yaml_is_fine(tmp_path):
+    (tmp_path / "host.yaml").write_text("")
+    load_config(tmp_path)
+
+
+def test_host_yaml_section_must_stay_a_mapping(tmp_path):
+    (tmp_path / "host.yaml").write_text("paths:\n")
+    with pytest.raises(ValueError, match="'paths' must be a mapping"):
+        load_config(tmp_path)
+
+
 def test_defaults_alone_load(tmp_path, monkeypatch):
     monkeypatch.setenv("BAU_HOME", str(tmp_path / "Application Support" / "BAU"))
     cfg = load_config(tmp_path)  # no host.yaml

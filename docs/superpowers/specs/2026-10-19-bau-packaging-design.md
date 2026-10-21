@@ -133,7 +133,7 @@ rollback.
 
 Nothing under `~/Library/Application Support/BAU` is a git repository, and
 nothing is edited by hand: `host.yaml` and the certificates are Ansible's;
-`state/paused` is touched by the dashboard or by Martin. The existing
+`state/paused` is touched (and removed to resume) by Martin; the dashboard shows it. The existing
 `/Users/nakomis/bau/...` paths and `/Users/bau/...` in the original spec are
 replaced by this.
 
@@ -147,14 +147,19 @@ replaced by this.
 4. Download `bau-v<version>` with `gh release download` (or `curl`, public repo)
    into a temp dir; verify `SHA256SUMS`.
 5. `uv venv --python 3.12 releases/<v>/venv`, then
-   `uv pip install --require-hashes -r requirements.txt <wheel>`. `uv` is
+   the bundle's two-step `INSTALL` file (hashed `requirements.txt` with
+   `--require-hashes`, then the wheel with `--no-deps`). `uv` is
    already a bootstrap requirement of Cere and manages the Python; no `pnpm`.
 6. `docker pull` the two images by the tags in `VERSION`; write `.env`.
 7. Smoke test **before** switching: `releases/<v>/venv/bin/bau --config
    <config> run --dry-run` and `bau version`. Failure leaves `current` untouched.
 8. Render `host.yaml` and the plists into `~/Library/LaunchAgents/`; flip the
    `current` symlink; `docker compose -p bau up -d` for the egress proxy;
-   `launchctl bootout` then `bootstrap` for each job whose plist changed.
+   `launchctl bootout` then `bootstrap` for each job whose plist changed, and
+   `launchctl kickstart -k gui/$UID/com.nakomis.bau-api` whenever `current`
+   moves (the plists name `current/...`, so they do not change between
+   releases and the KeepAlive `bau-api` would otherwise keep running the old
+   release).
 9. Prune all but the three newest releases (and image tags, via
    `docker image prune` on unused `bau-*`).
 10. Record `prod` in the deployment tracker (section 3.5).
@@ -214,7 +219,7 @@ Remaining, and where each goes:
 | `identities`, `github_app` (ids), keychain `service`/`account` refs | `defaults.yaml`; they are estate-wide, not per host |
 | `plane.url`, `plane.workspace`, `atc.url` | `defaults.yaml` |
 | `plane.client_cert`, `plane.client_key`, `paths.*` (repos, work, logs, snapshot, pause_file, atc_cache), `container.image` and `proxy` tags | `host.yaml`, rendered from `BAU_HOME` |
-| `paused` | removed from YAML: the pause file (`state/paused`, BAU-18) is the only switch. The YAML cannot be edited on the host any more, and the dashboard and Martin already write the file |
+| `paused` | removed from YAML: the pause file (`state/paused`, BAU-18) is the only switch. The YAML cannot be edited on the host any more, and Martin already writes the file, which the dashboard shows |
 | `container.image` | derived: the wheel's `_build.py` knows its own `<version>-<sha>`, so the agent image can never drift from the code |
 
 `${BAU_HOME}` and `~` are expanded when paths load (`_path()` already
@@ -247,9 +252,11 @@ Once, in the same play, guarded by `~/bau/src` existing:
 - **Normal**: set `bau_version` back (or `-e bau_version=<previous>`) and
   run `--tags bau`. The previous release directory is retained (last three), so
   step 3 skips the download and the install; it is a symlink flip, a `.env`
-  re-point (images are already local) and a job reload. No network, no build.
+  re-point (images are already local), a job reload and the `bau-api` kickstart
+  (`launchctl kickstart -k gui/$UID/com.nakomis.bau-api`). No network, no build.
 - **Emergency, at the console**: `ln -sfn releases/<v> current` and
-  `launchctl kickstart`; the plists name `current`, so nothing else moves.
+  `launchctl kickstart -k gui/$UID/com.nakomis.bau-api`; the plists name
+  `current`, so nothing else moves.
 - **Images**: `ALLOW_ONCE` means an old tag is always still in Nexus.
 - **State**: `state.json` and `atc-cache.json` are read tolerantly (unknown
   keys ignored, missing keys defaulted), so a release may be rolled back one
