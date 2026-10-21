@@ -147,7 +147,7 @@ Monthly, first Sunday 03:00, same preflight and pace guards. One session per act
 
 - Looks for: small, self-contained, well-specified items in eligible repos with no recent activity from Martin; items with no activity since the Taiga migration; duplicates; items a merged PR has already done. The spring-clean triage criteria form the prompt.
 - Does: comments "Suggested for BAU because …" on each candidate; creates one work item in `BAU` titled `Sweep <Month YYYY>` listing candidates by project with a one-line reason each. Martin labels the ones he agrees with.
-- Never: labels, closes, or changes the state of anything.
+- Never: labels, closes, or changes the state of anything. (Superseded 18 Oct 2026: the sweep now applies `BAU` or `not-bau` itself, with a `[bau:swept]` comment, and writes no summary item; see `2026-10-18-bau-questions-design.md`.)
 - Remembers (in Plane, via its own earlier comments) what it suggested before and skips unchanged items it suggested previously.
 
 ## 11. Failure handling and observability
@@ -171,7 +171,7 @@ The agent runs with permissions bypassed, so the walls are around it rather than
 - **Config is split.** Policy lives in `bau/defaults.yaml` inside the wheel; host facts live in `<BAU_HOME>/config/host.yaml`, rendered by Ansible and deep-merged over the defaults. Nothing under `BAU_HOME` is a git checkout or hand-edited, apart from `state/paused`.
 - **Rollback** is setting `bau_version` back: the three newest releases are retained, so it needs no download or build.
 - `install.sh` is deleted, and the runbook's install steps now point at the play.
-- BAU's own ATC row is `deploys: true` with `deploy_action: "Bump bau_version in home-servers cere/ansible and run scripts/cere-ansible.sh --tags bau"`, so its merged PRs land on its own deploy list.
+- BAU's own ATC row is to be set to `deploys: true` with `deploy_action: "Bump bau_version in home-servers cere/ansible and run scripts/cere-ansible.sh --tags bau"`, so its merged PRs land on its own deploy list.
 
 ## 13. Testing and rollout
 

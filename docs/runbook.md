@@ -12,6 +12,8 @@ No `pnpm`, Node or `docker build` is needed on Cere: CI builds the dashboard, th
 
 ## Layout on Cere
 
+> Target layout, built by BAU-25; Cere is still on the checkout install until then.
+
 `BAU_HOME` defaults to `~/Library/Application Support/BAU` (the path has a space; the plists and compose file quote it). Nothing under it is a git repository, and nothing is edited by hand except `state/paused`.
 
 | Path | Contents |
@@ -39,7 +41,7 @@ Secrets are read from the macOS login keychain, service `bau` (`bau/secrets.py`)
   `security add-generic-password -s bau -a proxy-token -w "$(openssl rand -hex 32)"`
   The same value goes in SSM `/bau/proxy-token` for Leia.
 
-Check an item exists with `security find-generic-password -s bau -a <account>`. The Cere playbook asserts they are present.
+Check an item exists with `security find-generic-password -s bau -a <account>`. Once BAU-25 lands, the Cere play asserts they are present.
 
 ## Configuration
 
@@ -76,7 +78,7 @@ uv run bau --config config/ run --dry-run
 Run this once the keychain items and GitHub App ids are in place:
 
 ```bash
-BAU=~/Library/"Application Support"/BAU/current/venv/bin/bau
+BAU=~/Library/"Application Support"/BAU/current/venv/bin/bau   # the target layout, once BAU-25 lands
 $BAU probe            # prints the current usage windows (RateLimit(...))
 $BAU run --dry-run    # lists what a real run would do, starts no sessions
 ```
@@ -95,13 +97,13 @@ No new sessions start after the `no_new_sessions_after` cut-off in `bau/defaults
 
 ## Sweep
 
-Each night the sweep reads the open items of every BAU-enabled project in ATC and asks an agent which are candidates for BAU: small and well specified, stale, duplicates, or already done by a merged BAU PR. The result is a summary item named "Sweep <Month YYYY>" in the BAU project, plus a comment on each candidate saying why it was suggested. A second sweep in the same month adds to that item instead of creating another. See `docs/superpowers/specs/2026-10-18-bau-questions-design.md` for the details.
+Each night the sweep reads the open items of every BAU-enabled project in ATC and labels them itself, with an agent's verdict: `BAU` for items it judges small and well specified, `not-bau` for the rest. It posts a `[bau:swept]` comment on each item saying why, quoting the agent's reason as `the sweep agent said: "..."` with brackets and link schemes stripped. There is no summary item. Items labelled `BAU` then go through triage and the questions queue like any other. See `docs/superpowers/specs/2026-10-18-bau-questions-design.md`.
 
-The sweep only proposes. It never adds the `BAU` label and never changes an item's state; Martin labels the candidates he agrees with.
+An item is swept only if it is unlabelled (not `BAU`, `bau-questions`, `not-bau` or `blocked`), in a backlog or unstarted state, assigned to nobody but the worker, and Martin has not commented on or edited it for `sweep_owner_quiet_days` (in `bau/defaults.yaml`). Items go to the agent in batches of `sweep_batch_items`.
 
-Label an item `not-bau` to stop the sweep suggesting it. The sweep also skips its own "Sweep <Month YYYY>" summaries, and it quotes the agent's reasons as `the sweep agent said: "..."` with brackets and link schemes stripped.
+Martin can overrule any verdict: remove or change the label in Plane. A `not-bau` label permanently excludes an item from the sweep.
 
-Its session wall clock is `limits.sweep_session_wall_clock_minutes` in `bau/defaults.yaml`. It shares `state/run.lock` with the night and `bau abandon`: `bau run` waits up to an hour for the lock and, if it still cannot start, records `stop_reason: locked` in `state.json` and exits 0.
+The sweep shares `state/run.lock` with the night and `bau abandon`: `bau run` waits up to an hour for the lock and, if it still cannot start, records `stop_reason: locked` in `state.json` and exits 0.
 
 ## Pause
 
@@ -127,7 +129,7 @@ ids=$(docker ps -q --filter label=bau.session=1)
 
 Only one `bau run` runs at a time: a second one finds `state/run.lock` held, prints `another bau run is in progress` and exits 0.
 
-The job stays unloaded until the Ansible play (tag `bau`) or `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nakomis.bau-run.plist` is run.
+The job stays unloaded until (once BAU-25 lands) the Ansible play (tag `bau`) or `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nakomis.bau-run.plist` is run.
 
 ## Dashboard and API
 
@@ -152,7 +154,7 @@ When Cere is wired, verify:
 3. Via Leia, with the client certificate: `/` returns the page (not the 503 text) and `/state.json` returns JSON.
 4. In Chrome, the dashboard renders, the tier matches BD-1's BAU row, and the PR links open the right GitHub pull requests.
 
-- The `proxy-token` keychain item (see "Keychain items") must exist before the API job is installed. If it is missing, the play skips `com.nakomis.bau-api` with a loud message and installs the other jobs; add the item and re-run the play.
+- The `proxy-token` keychain item (see "Keychain items") must exist before the API job is installed. If it is missing, once BAU-25 lands, the play skips `com.nakomis.bau-api` with a loud message and installs the other jobs; add the item and re-run the play.
 - Abandon from the shell: `bau abandon REF [--note "why"]`. It restores the item's previous state first, then closes the PR, deletes the checkout, removes the `BAU` label and posts a `[bau:abandoned]` comment.
 - Abandon takes the same lock as `bau run`. While a night is running it answers 409 ("another BAU operation is in progress; try again shortly"); try again after about 05:30.
 
@@ -168,11 +170,13 @@ docker logs bau-egress             # egress proxy: denied requests
 
 ## Upgrade and rollback
 
-Do not upgrade while a run is active, roughly 01:00 to 05:30: the play reloads the jobs and would interrupt it. It skips itself inside that window or while a run holds the lock, unless run with `-e bau_force=true`. Use "Stop a run now" first if one is in progress.
+> Target procedure, built by BAU-25; Cere is still on the checkout install until then.
+
+Do not upgrade while a run is active, roughly 01:00 to 05:30: the play reloads the jobs and would interrupt it. Once BAU-25 lands, the play skips itself inside that window or while a run holds the lock, unless run with `-e bau_force=true`. Use "Stop a run now" first if one is in progress.
 
 Upgrading is a home-servers pull request bumping `bau_version` in `cere/ansible`, then `scripts/cere-ansible.sh --tags bau`, run through the midichlorian MCP. `-e bau_version=<v>` overrides the pin for a one-off.
 
-Rollback is the same in reverse: set `bau_version` back and run the play. The three newest releases are kept under `releases/`, so a rollback is a symlink flip and a job reload, with no download or build. At the console, in an emergency:
+Rollback is the same in reverse: set `bau_version` back and run the play. Once BAU-25 lands, the three newest releases are kept under `releases/`, so a rollback is a symlink flip and a job reload, with no download or build. At the console, in an emergency:
 
 ```bash
 cd ~/Library/"Application Support"/BAU
