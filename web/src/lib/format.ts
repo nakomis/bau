@@ -88,6 +88,7 @@ export function normaliseSnapshot(raw: unknown): Snapshot {
     declined: list(s.declined),
     questions: list(s.questions),
     uninstalled: list(s.uninstalled),
+    unreadable: list(s.unreadable),
   };
 }
 

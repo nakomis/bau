@@ -257,10 +257,11 @@ describe('submitAnswers and markNotBau', () => {
     expect(JSON.parse(f.mock.calls[0][1].body)).toEqual({ note: 'nope' });
   });
 
-  it('normalises absent questions and uninstalled to empty lists', () => {
+  it('normalises absent questions, uninstalled and unreadable to empty lists', () => {
     const s = normaliseSnapshot({ schema: 2 });
     expect(s.questions).toEqual([]);
     expect(s.uninstalled).toEqual([]);
+    expect(s.unreadable).toEqual([]);
   });
 });
 

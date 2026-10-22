@@ -17,6 +17,7 @@ class FakePlane:
     def __init__(self, items: dict[str, list[Item]], comments: dict[str, list[Comment]] | None = None):
         self.items, self.comments_by_ref, self.calls = items, comments or {}, []
         self.unreachable: Exception | None = None
+        self.forbidden: set[str] = set()  # projects BAU's Plane account cannot read
 
     def list_items(self, identifier, label):
         return [i for i in self.items.get(identifier, []) if label in i.labels]
@@ -47,6 +48,8 @@ class FakePlane:
     def _project(self, identifier):
         if self.unreachable:
             raise self.unreachable
+        if identifier in self.forbidden:
+            raise RuntimeError(f"Plane GET /projects/{identifier}/states/ -> 403")
         return {"project": {"identifier": identifier}}
 
     def comment(self, ref, markdown):
