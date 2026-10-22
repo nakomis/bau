@@ -110,6 +110,7 @@ def build_snapshot(
     nudge_thresholds: Nudge,
     uninstalled: list[str],
     now: float,
+    unreadable: list[str] | None = None,
     pace_override: dict | None = None,
 ) -> dict:
     if latest is None:
@@ -136,6 +137,7 @@ def build_snapshot(
         "questions": [asdict(r) for r in questions],
         "nudge": nudge(open_prs, questions, nudge_thresholds),
         "uninstalled": uninstalled,
+        "unreadable": unreadable or [],
     }
 
 

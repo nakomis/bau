@@ -129,6 +129,12 @@ export default function App() {
                 Waiting for the GitHub App: {(snap.uninstalled ?? []).join(', ')}
               </p>
             )}
+            {(snap.unreadable ?? []).length > 0 && (
+              <p className="mt-4 text-sm text-dim">
+                BAU can't read these Plane projects (is bau a member?):{' '}
+                {(snap.unreadable ?? []).join(', ')}
+              </p>
+            )}
             <Questions
               rows={snap.questions ?? []}
               level={snap.nudge?.questions ?? 'ok'}

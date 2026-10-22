@@ -314,6 +314,7 @@ def _write_run_snapshot(
         questions=question_rows,
         nudge_thresholds=cfg.nudge,
         uninstalled=report.uninstalled,
+        unreadable=report.unreadable,
         now=time.time(),
         pace_override=previous.get("pace"),
     )
@@ -448,6 +449,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 questions=question_rows,
                 nudge_thresholds=cfg.nudge,
                 uninstalled=previous.get("uninstalled", []),
+                unreadable=previous.get("unreadable", []),
                 now=time.time(),
                 pace_override=previous.get("pace"),
             ),

@@ -69,5 +69,6 @@ export type Snapshot = {
   questions?: QuestionRow[];
   nudge?: Nudge;
   uninstalled?: string[];
+  unreadable?: string[];
   declined?: { ref: string; reason: string; at: string }[];
 };

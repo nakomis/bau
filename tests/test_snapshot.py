@@ -62,11 +62,12 @@ def test_snapshot_schema_2_has_questions_and_nudge():
         questions=[q(age=4)],
         nudge_thresholds=NUDGE,
         uninstalled=["o/gone"],
+        unreadable=["KATOO"],
     )
     assert snap["schema"] == 2
     assert snap["questions"][0]["ref"] == "HOME-2" and snap["questions"][0]["age_days"] == 4
     assert snap["nudge"] == {"level": "warn", "prs": "ok", "questions": "warn"}
-    assert snap["uninstalled"] == ["o/gone"]
+    assert snap["uninstalled"] == ["o/gone"] and snap["unreadable"] == ["KATOO"]
     assert snap["last_run"]["asked"] == 5 and snap["last_run"]["swept"] == 3
 
 

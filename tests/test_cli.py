@@ -401,7 +401,7 @@ def test_failed_run_snapshot_keeps_previous_questions_and_nudge(run_world):
     assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 1
     snap = read_snapshot(run_world.snapshot)
     assert snap["questions"] == [{"ref": "HOME-5"}] and snap["nudge"]["level"] == "warn"
-    assert snap["uninstalled"] == []
+    assert snap["uninstalled"] == [] and snap["unreadable"] == []
 
 
 def test_hourly_snapshot_carries_uninstalled_forward(run_world, monkeypatch):
@@ -409,11 +409,11 @@ def test_hourly_snapshot_carries_uninstalled_forward(run_world, monkeypatch):
 
     from bau.snapshot import read_snapshot
 
-    run_world.snapshot.write_text(json.dumps({"uninstalled": ["o/gone"]}))
+    run_world.snapshot.write_text(json.dumps({"uninstalled": ["o/gone"], "unreadable": ["KATOO"]}))
     monkeypatch.setattr(run_world.cli, "snapshot_rows", lambda *a, **k: ([], [], []))
     assert run_world.cli.main(["snapshot", "--config", str(run_world.config_dir)]) == 0
     snap = read_snapshot(run_world.snapshot)
-    assert snap["uninstalled"] == ["o/gone"] and snap["schema"] == 2
+    assert snap["uninstalled"] == ["o/gone"] and snap["unreadable"] == ["KATOO"] and snap["schema"] == 2
 
 
 def test_snapshot_rows_keeps_previous_questions_when_plane_fails():

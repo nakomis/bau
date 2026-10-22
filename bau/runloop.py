@@ -104,6 +104,7 @@ class NightReport:
     triaged: int = 0
     asked: int = 0
     uninstalled: list[str] = field(default_factory=list)
+    unreadable: list[str] = field(default_factory=list)  # ATC projects BAU's Plane account cannot read
     atc: str = "ok"  # "stale" when ATC was unreachable and its cached copy was used
 
 
@@ -306,17 +307,25 @@ class Night:
 
     # -- passes --------------------------------------------------------------
     def preflight(self) -> bool:
-        """One Plane call, then GitHub tokens until one mints: an unreachable service ends the night
-        with a snapshot that says so, rather than a crash part-way through. One repo without an
-        installation is not an outage; the repo loop in run() skips it."""
+        """Read each project from Plane, then GitHub tokens until one mints: an unreachable service
+        ends the night with a snapshot that says so, rather than a crash part-way through. One
+        project BAU cannot read (not a member, say) is not an outage: it sits tonight out. Nor is one
+        repo without an installation; the repo loop in run() skips it."""
         if not self.projects:
             self.log("preflight: ATC lists no BAU-enabled projects; nothing to do")
             return True
-        try:
-            ident = next((i for i, p in self.projects.items() if p.repo), next(iter(self.projects)))
-            self.plane._project(ident)
-        except Exception as e:
-            return self.preflight_failed(e)
+        failures: dict[str, Exception] = {}
+        for ident in self.projects:
+            try:
+                self.plane._project(ident)
+            except Exception as e:
+                failures[ident] = e
+        if len(failures) == len(self.projects):
+            return self.preflight_failed(next(iter(failures.values())))
+        for ident, e in failures.items():
+            self.report.unreadable.append(ident)
+            self.log(f"{ident}: unreadable in Plane, skipping it tonight: {type(e).__name__}: {e}")
+        self.projects = {i: p for i, p in self.projects.items() if i not in failures}
         last: Exception | None = None
         for repo in sorted({p.repo for p in self.projects.values() if p.repo}):
             try:

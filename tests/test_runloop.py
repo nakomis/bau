@@ -1122,6 +1122,30 @@ class InstalledOn(StubApp):
         return super().installation_token(repo)
 
 
+def test_unreadable_project_does_not_end_the_night(cfg, tmp_path):
+    projects = {"KATOO": ProjectConfig("KATOO", "nakomis/katooni", False)} | PROJECTS
+    plane = TriagedPlane({"HOME": [item()], "KATOO": [item(ref="KATOO-1")]})
+    plane.forbidden = {"KATOO"}
+    gh = FakeGitHub(open_prs={REPO: []}, ci={"abc": "green"})
+    runner = FakeRunner([SessionResult("done", "", good_rl(), 0.5, "Opened")], on_run=opens_pr(gh, pr()))
+    logs = []
+    n = night(cfg, plane, gh, runner, FakeRepos(tmp_path), logs=logs, projects=projects)
+    report = n.run()
+    assert report.stop_reason == "ok" and report.unreadable == ["KATOO"]
+    assert list(n.projects) == list(PROJECTS) and "nakomis/katooni" not in n.installed
+    assert [b[0] for b in runner.briefs] == ["bau-home-42"] and report.prs_opened == 1
+    assert not any(c[1][0] == "KATOO-1" for c in plane.calls)
+    assert any("KATOO: unreadable in Plane" in line for line in logs)
+
+
+def test_every_project_unreadable_is_a_preflight_failure(cfg, tmp_path):
+    plane = TriagedPlane({"HOME": [item()]})
+    plane.forbidden = set(PROJECTS)
+    runner = FakeRunner([])
+    report = night(cfg, plane, FakeGitHub(open_prs={REPO: []}), runner, FakeRepos(tmp_path)).run()
+    assert report.stop_reason == "preflight: RuntimeError" and runner.briefs == []
+
+
 def test_first_projects_repo_uninstalled_still_runs_the_installed_repos_work(cfg, tmp_path):
     first = "nakomis/aardvark"  # first in projects.yaml order and in sorted order
     projects = {"AARD": ProjectConfig("AARD", first, False)} | PROJECTS

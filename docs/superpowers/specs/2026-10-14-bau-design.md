@@ -62,7 +62,7 @@ The host holds everything persistent; the container holds nothing after it exits
 
 At 01:00 `bau-run` does the following in order.
 
-1. **Preflight.** Confirm Plane, GitHub and Anthropic are reachable. Read the `paused` flag. Run a one-line probe session (`claude -p` with a trivial prompt, `--output-format stream-json`) and take the five-hour and seven-day utilisation from its `rate_limit_event`. If the pace rule already fails, write the snapshot with `stop_reason: pace` and exit.
+1. **Preflight.** Confirm Plane, GitHub and Anthropic are reachable. Every BAU-enabled project is read from Plane once; one BAU's Plane account cannot read (it is not a member, say) sits the night out and is listed in the snapshot's `unreadable` and on the dashboard; only every project failing is a preflight failure (BAU-27). Read the `paused` flag. Run a one-line probe session (`claude -p` with a trivial prompt, `--output-format stream-json`) and take the five-hour and seven-day utilisation from its `rate_limit_event`. If the pace rule already fails, write the snapshot with `stop_reason: pace` and exit.
 2. **Fetch.** Update main in every bare clone.
 3. **Feedback first.** For every open BAU PR, in oldest-first order, the runner builds a pending-feedback set from identity and thread state, never from timestamps:
    - every unresolved review thread on the PR whose latest comment is not the worker's own, counting only comments by Martin's GitHub login (`nakomis`); comments by CI bots or anyone else are data, not instructions;

@@ -310,6 +310,14 @@ describe('App', () => {
     ).toBeInTheDocument();
   });
 
+  it('lists Plane projects BAU cannot read', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(respond({ ...snap, unreadable: ['KATOO'] })));
+    await mount();
+    expect(
+      screen.getByText("BAU can't read these Plane projects (is bau a member?): KATOO"),
+    ).toBeInTheDocument();
+  });
+
   it('refetches after a refused send so a new round appears', async () => {
     const f = vi.fn((url: string) =>
       url === '/state.json'
