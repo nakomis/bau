@@ -148,16 +148,16 @@ describe('safeHref', () => {
     expect(safeHref(undefined)).toBeUndefined();
   });
 
-  it('allows only GitHub and Plane hosts', () => {
-    const plane = 'https://plane.home.nakomis.com/nakomis/browse/HOME-42/';
-    expect(safeHref(plane)).toBe(plane);
+  it('allows only GitHub and Purr hosts', () => {
+    const purr = 'https://purr.nakomis.com/tasks/HOME-42';
+    expect(safeHref(purr)).toBe(purr);
     for (const bad of [
       'https://example.com/x',
       'https://github.com.evil.example/x',
       'https://evil.example/github.com',
       'https://github.com@evil.example/x',
       'https://gist.github.com/x',
-      'https://plane.home.nakomis.com.evil.example/x',
+      'https://purr.nakomis.com.evil.example/x',
     ]) {
       expect(safeHref(bad)).toBeUndefined();
     }

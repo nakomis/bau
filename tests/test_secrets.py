@@ -15,8 +15,8 @@ def test_read_secret_calls_security():
 
         return R()
 
-    assert read_secret(KeychainRef("bau", "plane-api-key"), runner=fake_run) == "s3cret"
-    assert seen["cmd"] == ["security", "find-generic-password", "-s", "bau", "-a", "plane-api-key", "-w"]
+    assert read_secret(KeychainRef("bau", "purr-api-key"), runner=fake_run) == "s3cret"
+    assert seen["cmd"] == ["security", "find-generic-password", "-s", "bau", "-a", "purr-api-key", "-w"]
 
 
 def test_read_secret_missing_item_raises():

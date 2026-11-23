@@ -98,8 +98,8 @@ function Card({
           {row.repo.replace('nakomis/', '')} · {ageLabel(row.age_days)}
         </span>
         <span className="ml-auto flex gap-3 text-sm">
-          <ExtLink className="text-dim underline" href={row.plane_url}>
-            Plane ↗
+          <ExtLink className="text-dim underline" href={row.purr_url}>
+            Purr ↗
           </ExtLink>
           <ExtLink className="text-dim underline" href={row.repo_url}>
             Repo ↗

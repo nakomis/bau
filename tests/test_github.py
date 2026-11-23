@@ -47,7 +47,7 @@ PR_JSON = {
     "draft": True,
     "created_at": "2026-10-15T01:30:00Z",
     "merged_at": None,
-    "body": "Plane: HOME-42",
+    "body": "Purr: HOME-42",
     "mergeable_state": "clean",
     "user": {"login": "nakomis-bau[bot]"},
     "changed_files": 3,

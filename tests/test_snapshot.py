@@ -97,7 +97,7 @@ def test_snapshot_shape_and_pace_fields():
                 "green",
                 False,
                 1,
-                "https://plane/HOME-42",
+                "https://purr/HOME-42",
             )
         ],
         deploy_pending=[

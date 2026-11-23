@@ -15,7 +15,7 @@ const pr = (i: number): OpenPr => ({
   ci: 'green',
   draft: false,
   unresolved_comments: 0,
-  plane_url: 'https://plane.home.nakomis.com/nakomis/browse/X/',
+  purr_url: 'https://purr.nakomis.com/tasks/X',
 });
 
 const snap = (n: number, extra: Partial<Snapshot> = {}): Snapshot => ({

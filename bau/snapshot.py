@@ -23,7 +23,7 @@ class OpenPrRow:
     ci: str
     draft: bool
     unresolved_comments: int
-    plane_url: str
+    purr_url: str
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,7 @@ class QuestionRow:
     repo: str
     ref: str
     title: str
-    plane_url: str
+    purr_url: str
     repo_url: str
     asked_at: str
     age_days: int
@@ -64,9 +64,9 @@ class LastRun:
     labelled_not_bau: int = 0
     triaged: int = 0
     asked: int = 0
-    atc: str = "ok"  # "stale": ran on the cached copy of ATC's data; "empty": ATC listed no projects
-    atc_fetched_at: str = ""  # when stale: when the cached copy was fetched
-    atc_age_hours: float | None = None  # when stale: the cached copy's age
+    board: str = "ok"  # "stale": ran on the cached copy of Purr's data; "empty": Purr listed no projects
+    board_fetched_at: str = ""  # when stale: when the cached copy was fetched
+    board_age_hours: float | None = None  # when stale: the cached copy's age
 
 
 def _level(count: int, oldest: int, warn_count: int, warn_days: int, down_count: int, down_days: int) -> str:

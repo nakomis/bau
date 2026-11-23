@@ -1,4 +1,4 @@
-"""The Plane comment protocol: markers the worker writes and later reads back.
+"""The Purr comment protocol: markers the worker writes and later reads back.
 
 Only comments authored by the worker are ever parsed, so a marker pasted into
 a ticket description or someone else's comment is inert.
@@ -10,7 +10,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from bau.plane import Comment
+from bau.purr import Comment
 
 VERDICTS = ("ready", "questions", "too_big")
 
@@ -123,8 +123,8 @@ def swept_comment(verdict: str, reason_said: str) -> str:
     return f"[bau:swept verdict={verdict}]\n\n{reason_said}"
 
 
-def _by_worker(comments: list[Comment], worker_email: str) -> list[Comment]:
-    return [c for c in comments if c.author_email == worker_email]
+def _by_worker(comments: list[Comment], worker_actor: str) -> list[Comment]:
+    return [c for c in comments if c.author == worker_actor]
 
 
 def _parse_asked(c: Comment) -> Asked | None:
@@ -167,30 +167,30 @@ def _parse_answered(c: Comment) -> Answered | None:
         return None
 
 
-def _all_asked(comments: list[Comment], worker_email: str) -> list[Asked]:
-    parsed = (_parse_asked(c) for c in _by_worker(comments, worker_email))
+def _all_asked(comments: list[Comment], worker_actor: str) -> list[Asked]:
+    parsed = (_parse_asked(c) for c in _by_worker(comments, worker_actor))
     return [a for a in parsed if a]
 
 
-def latest_verdict(comments: list[Comment], worker_email: str) -> Verdict | None:
+def latest_verdict(comments: list[Comment], worker_actor: str) -> Verdict | None:
     found = None
-    for c in _by_worker(comments, worker_email):
+    for c in _by_worker(comments, worker_actor):
         m = _TRIAGE.match(c.text.lstrip())
         if m and m.group(1) in VERDICTS:
             found = Verdict(m.group(1), int(m.group(2)), m.group(3), c.created_at)
     return found
 
 
-def latest_asked(comments: list[Comment], worker_email: str) -> Asked | None:
-    asked = _all_asked(comments, worker_email)
+def latest_asked(comments: list[Comment], worker_actor: str) -> Asked | None:
+    asked = _all_asked(comments, worker_actor)
     return asked[-1] if asked else None
 
 
-def answered(comments: list[Comment], worker_email: str) -> list[Answered]:
-    parsed = (_parse_answered(c) for c in _by_worker(comments, worker_email))
+def answered(comments: list[Comment], worker_actor: str) -> list[Answered]:
+    parsed = (_parse_answered(c) for c in _by_worker(comments, worker_actor))
     return [a for a in parsed if a]
 
 
-def history(comments: list[Comment], worker_email: str) -> list[tuple[Asked, Answered | None]]:
-    answers = {a.round: a for a in answered(comments, worker_email)}
-    return [(a, answers.get(a.round)) for a in _all_asked(comments, worker_email)]
+def history(comments: list[Comment], worker_actor: str) -> list[tuple[Asked, Answered | None]]:
+    answers = {a.round: a for a in answered(comments, worker_actor)}
+    return [(a, answers.get(a.round)) for a in _all_asked(comments, worker_actor)]

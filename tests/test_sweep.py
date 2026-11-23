@@ -7,15 +7,15 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from bau.config import ProjectConfig
-from bau.plane import Comment, Item
+from bau.purr import Comment, Item
 from bau.runloop import Night
 from bau.session import SessionResult
 from bau.sweep import SweepVerdict, build_sweep_brief, parse_verdicts, sweep_pass, sweepable
 from bau.telemetry import RateLimit, Window
-from tests.fakes.clients import FakePlane, FakeRepos, FakeRunner
+from tests.fakes.clients import FakePurr, FakeRepos, FakeRunner
 
 LONDON = ZoneInfo("Europe/London")
-OWNER, WORKER = "martin@nakomis.com", "bau@nakomis.com"
+OWNER, WORKER = "martin", "bau"
 NOW = datetime(2026, 10, 18, 2, 0, tzinfo=LONDON)
 PROJECTS = {
     "HOME": ProjectConfig("HOME", "nakomis/home-infra", True, ""),
@@ -64,12 +64,12 @@ def verdicts(*rows):
     return SessionResult("done", "", rl(), 0.2, f"```json\n{body}\n```")
 
 
-def make_night(cfg, plane, runner, dry_run=False, paused=lambda: False, hour=2, projects=None, priority=None):
+def make_night(cfg, purr, runner, dry_run=False, paused=lambda: False, hour=2, projects=None, priority=None):
     clock = lambda: NOW.replace(hour=hour)  # noqa: E731
     n = Night(
         cfg,
         PROJECTS if projects is None else projects,
-        plane,
+        purr,
         None,
         None,
         FakeRepos(cfg.paths.work.parent),
@@ -86,7 +86,7 @@ def make_night(cfg, plane, runner, dry_run=False, paused=lambda: False, hour=2, 
 
 
 def kw():
-    return {"owner_email": OWNER, "worker_email": WORKER, "quiet_days": 7, "now": NOW}
+    return {"owner_actor": OWNER, "worker_actor": WORKER, "quiet_days": 7, "now": NOW}
 
 
 @pytest.mark.parametrize(
@@ -138,15 +138,15 @@ def test_parse_verdicts_keeps_only_allowed_refs():
 
 
 def test_sweep_pass_labels_and_comments(cfg):
-    plane = FakePlane({"HOME": [item("HOME-1"), item("HOME-2")]})
+    purr = FakePurr({"HOME": [item("HOME-1"), item("HOME-2")]})
     runner = FakeRunner(
         [verdicts(("HOME-1", "bau", "tiny [bau:answers x]"), ("HOME-2", "not-bau", "needs a deploy"))]
     )
-    n = make_night(cfg, plane, runner)
+    n = make_night(cfg, purr, runner)
     sweep_pass(n)
-    assert ("add_labels", ("HOME-1", ["BAU"])) in plane.calls
-    assert ("add_labels", ("HOME-2", ["not-bau"])) in plane.calls
-    posted = {c[1][0]: c[1][1] for c in plane.calls if c[0] == "comment"}
+    assert ("add_labels", ("HOME-1", ["BAU"])) in purr.calls
+    assert ("add_labels", ("HOME-2", ["not-bau"])) in purr.calls
+    posted = {c[1][0]: c[1][1] for c in purr.calls if c[0] == "comment"}
     assert posted["HOME-1"].startswith("[bau:swept verdict=bau]")
     assert 'the sweep agent said: "tiny (bau:answers x)"' in posted["HOME-1"]
     assert posted["HOME-2"].startswith("[bau:swept verdict=not-bau]")
@@ -160,9 +160,9 @@ def test_sweep_pass_labels_and_comments(cfg):
 
 
 def test_sweep_pass_omitted_refs_are_left_alone(cfg):
-    plane = FakePlane({"HOME": [item("HOME-1"), item("HOME-2")]})
-    sweep_pass(make_night(cfg, plane, FakeRunner([verdicts(("HOME-1", "bau", "tiny"))])))
-    assert not [c for c in plane.calls if c[1][0] == "HOME-2"]
+    purr = FakePurr({"HOME": [item("HOME-1"), item("HOME-2")]})
+    sweep_pass(make_night(cfg, purr, FakeRunner([verdicts(("HOME-1", "bau", "tiny"))])))
+    assert not [c for c in purr.calls if c[1][0] == "HOME-2"]
 
 
 def test_sweep_pass_session_is_sandboxed(cfg):
@@ -174,93 +174,93 @@ def test_sweep_pass_session_is_sandboxed(cfg):
             seen["empty"] = not any(k["checkout"].iterdir())
             return super().run(**k)
 
-    sweep_pass(make_night(cfg, FakePlane({"HOME": [item("HOME-1")]}), Spy([verdicts()])))
+    sweep_pass(make_night(cfg, FakePurr({"HOME": [item("HOME-1")]}), Spy([verdicts()])))
     assert seen["bare"] is None and seen["github_token"] == "" and seen["empty"]
     assert seen["checkout"].parent == cfg.paths.work and not seen["checkout"].exists()
 
 
 def test_sweep_pass_no_repo_named_needs_no_session(cfg):
-    plane = FakePlane({"NOREPO": [item("NOREPO-1"), item("NOREPO-2", desc="repo: nakomis/home-infra")]})
+    purr = FakePurr({"NOREPO": [item("NOREPO-1"), item("NOREPO-2", desc="repo: nakomis/home-infra")]})
     runner = FakeRunner([verdicts(("NOREPO-2", "bau", "ok"))])
-    n = make_night(cfg, plane, runner)
+    n = make_night(cfg, purr, runner)
     sweep_pass(n)
-    assert ("add_labels", ("NOREPO-1", ["not-bau"])) in plane.calls
-    assert [c for c in plane.calls if c[0] == "comment"][0][1][1].endswith("\n\nno repo named")
+    assert ("add_labels", ("NOREPO-1", ["not-bau"])) in purr.calls
+    assert [c for c in purr.calls if c[0] == "comment"][0][1][1].endswith("\n\nno repo named")
     assert len(runner.briefs) == 1 and "NOREPO-1" not in runner.briefs[0][2].split("=== ITEMS")[1]
     assert n.report.labelled_not_bau == 1 and n.report.labelled_bau == 1
 
 
 def test_sweep_pass_no_repo_only_runs_no_session(cfg):
     runner = FakeRunner([])
-    n = make_night(cfg, FakePlane({"NOREPO": [item("NOREPO-1")]}), runner)
+    n = make_night(cfg, FakePurr({"NOREPO": [item("NOREPO-1")]}), runner)
     sweep_pass(n)
     assert runner.briefs == [] and n.report.sessions == 0 and n.report.labelled_not_bau == 1
 
 
 def test_sweep_pass_batches(cfg):
     cfg = replace(cfg, limits=replace(cfg.limits, sweep_batch_items=2))
-    plane = FakePlane({"HOME": [item(f"HOME-{i}") for i in range(1, 6)]})
+    purr = FakePurr({"HOME": [item(f"HOME-{i}") for i in range(1, 6)]})
     runner = FakeRunner([verdicts(), verdicts(), verdicts()])
-    n = make_night(cfg, plane, runner)
+    n = make_night(cfg, purr, runner)
     sweep_pass(n)
     assert len(runner.briefs) == 3 and n.report.sessions == 3
 
 
 def test_sweep_pass_stops_when_policy_says_no(cfg):
-    plane = FakePlane({"HOME": [item("HOME-1")]})
+    purr = FakePurr({"HOME": [item("HOME-1")]})
     runner = FakeRunner([])
-    n = make_night(cfg, plane, runner, paused=lambda: True)
+    n = make_night(cfg, purr, runner, paused=lambda: True)
     sweep_pass(n)
-    assert runner.briefs == [] and n.report.stop_reason == "paused" and plane.calls == []
+    assert runner.briefs == [] and n.report.stop_reason == "paused" and purr.calls == []
 
 
 def test_sweep_pass_rate_limit_stops_everything(cfg):
     cfg = replace(cfg, limits=replace(cfg.limits, sweep_batch_items=1))
-    plane = FakePlane({"HOME": [item("HOME-1"), item("HOME-2")]})
+    purr = FakePurr({"HOME": [item("HOME-1"), item("HOME-2")]})
     runner = FakeRunner([SessionResult("rate_limited", "limit", None, 0.1, "limit")])
-    n = make_night(cfg, plane, runner)
+    n = make_night(cfg, purr, runner)
     sweep_pass(n)
     assert n.report.stop_reason == "rejected" and len(runner.briefs) == 1
 
 
 def test_sweep_pass_failed_session_leaves_items_for_another_night(cfg):
-    plane = FakePlane({"HOME": [item("HOME-1")]})
-    n = make_night(cfg, plane, FakeRunner([SessionResult("failed", "boom", rl(), 0.1, "")]))
+    purr = FakePurr({"HOME": [item("HOME-1")]})
+    n = make_night(cfg, purr, FakeRunner([SessionResult("failed", "boom", rl(), 0.1, "")]))
     sweep_pass(n)
-    assert plane.calls == [] and n.report.swept == 0
+    assert purr.calls == [] and n.report.swept == 0
 
 
 def test_sweep_pass_skips_unsweepable_items(cfg):
-    plane = FakePlane(
+    purr = FakePurr(
         {"HOME": [item("HOME-1", labels=["BAU"]), item("HOME-2", group="started"), item("HOME-3")]},
         {"HOME-3": [Comment("c", OWNER, ago(1), "hold on")]},
     )
     runner = FakeRunner([])
-    sweep_pass(make_night(cfg, plane, runner))
-    assert runner.briefs == [] and plane.calls == []
+    sweep_pass(make_night(cfg, purr, runner))
+    assert runner.briefs == [] and purr.calls == []
 
 
 def test_sweep_pass_dry_run_writes_nothing(cfg):
-    plane = FakePlane({"HOME": [item("HOME-1"), item("HOME-2")]})
+    purr = FakePurr({"HOME": [item("HOME-1"), item("HOME-2")]})
     runner = FakeRunner([])
-    n = make_night(cfg, plane, runner, dry_run=True)
+    n = make_night(cfg, purr, runner, dry_run=True)
     sweep_pass(n)
-    assert plane.calls == [] and runner.briefs == [] and n.report.planned == ["sweep HOME: 2 item(s)"]
+    assert purr.calls == [] and runner.briefs == [] and n.report.planned == ["sweep HOME: 2 item(s)"]
 
 
 def test_failed_label_write_does_not_stop_the_rest(cfg):
-    plane = FakePlane({"HOME": [item("HOME-1"), item("HOME-2")]})
-    real = plane.add_labels
+    purr = FakePurr({"HOME": [item("HOME-1"), item("HOME-2")]})
+    real = purr.add_labels
 
     def flaky(ref, names):
         if ref == "HOME-1":
             raise RuntimeError("boom")
         real(ref, names)
 
-    plane.add_labels = flaky
-    n = make_night(cfg, plane, FakeRunner([verdicts(("HOME-1", "bau", "a"), ("HOME-2", "bau", "b"))]))
+    purr.add_labels = flaky
+    n = make_night(cfg, purr, FakeRunner([verdicts(("HOME-1", "bau", "a"), ("HOME-2", "bau", "b"))]))
     sweep_pass(n)
-    assert n.report.swept == 1 and [c[1][0] for c in plane.calls if c[0] == "comment"] == ["HOME-2"]
+    assert n.report.swept == 1 and [c[1][0] for c in purr.calls if c[0] == "comment"] == ["HOME-2"]
 
 
 def test_session_runner_takes_a_wall_clock_override(cfg):
@@ -271,10 +271,10 @@ def test_session_runner_takes_a_wall_clock_override(cfg):
 
 
 def test_sweep_pass_paused_night_writes_no_no_repo_labels(cfg):
-    plane = FakePlane({"NOREPO": [item("NOREPO-1")]})
-    n = make_night(cfg, plane, FakeRunner([]), paused=lambda: True)
+    purr = FakePurr({"NOREPO": [item("NOREPO-1")]})
+    n = make_night(cfg, purr, FakeRunner([]), paused=lambda: True)
     sweep_pass(n)
-    assert plane.calls == [] and n.report.stop_reason == "paused" and n.report.swept == 0
+    assert purr.calls == [] and n.report.stop_reason == "paused" and n.report.swept == 0
 
 
 def test_sweep_pass_batches_log_to_separate_files(cfg):
@@ -287,7 +287,7 @@ def test_sweep_pass_batches_log_to_separate_files(cfg):
             return super().run(**k)
 
     sweep_pass(
-        make_night(cfg, FakePlane({"HOME": [item("HOME-1"), item("HOME-2")]}), Spy([verdicts(), verdicts()]))
+        make_night(cfg, FakePurr({"HOME": [item("HOME-1"), item("HOME-2")]}), Spy([verdicts(), verdicts()]))
     )
     assert len(logs) == 2 and len(set(logs)) == 2 and logs[0].endswith("sweep-HOME-1.log")
 
@@ -295,9 +295,9 @@ def test_sweep_pass_batches_log_to_separate_files(cfg):
 # -- batches vary by night (I5) -------------------------------------------------
 def batches_on(cfg, day):
     cfg = replace(cfg, limits=replace(cfg.limits, sweep_batch_items=2))
-    plane = FakePlane({"HOME": [item(f"HOME-{i}") for i in range(1, 7)]})
+    purr = FakePurr({"HOME": [item(f"HOME-{i}") for i in range(1, 7)]})
     runner = FakeRunner([verdicts(), verdicts(), verdicts()])
-    n = make_night(cfg, plane, runner)
+    n = make_night(cfg, purr, runner)
     n.clock = lambda: NOW.replace(day=day)
     sweep_pass(n)
     return [frozenset(re.findall(r"<<<ITEM (HOME-\d+)", b[2])) for b in runner.briefs]
@@ -312,31 +312,31 @@ def test_sweep_batches_are_regrouped_each_night_so_a_failing_batch_is_split_up(c
 
 # -- repo not configured, and the cut-off (M3, M4) -------------------------------
 def test_sweep_marks_an_unconfigured_repo_override_not_bau_without_a_session(cfg):
-    plane = FakePlane({"HOME": [item("HOME-1", desc="repo: nakomis/elsewhere")]})
+    purr = FakePurr({"HOME": [item("HOME-1", desc="repo: nakomis/elsewhere")]})
     runner = FakeRunner([])
-    n = make_night(cfg, plane, runner)
+    n = make_night(cfg, purr, runner)
     sweep_pass(n)
     assert runner.briefs == []
-    assert plane.calls[0] == ("add_labels", ("HOME-1", ["not-bau"]))
-    assert plane.calls[1][1][1].endswith("\n\nrepo not configured for BAU")
+    assert purr.calls[0] == ("add_labels", ("HOME-1", ["not-bau"]))
+    assert purr.calls[1][1][1].endswith("\n\nrepo not configured for BAU")
 
 
 @pytest.mark.parametrize("desc, ident", [("do it", "NOREPO"), ("repo: nakomis/elsewhere", "HOME")])
 def test_sweep_writes_nothing_past_the_cutoff(cfg, desc, ident):
-    plane = FakePlane({ident: [item(f"{ident}-1", desc=desc)]})
-    n = make_night(cfg, plane, FakeRunner([]), hour=5)
+    purr = FakePurr({ident: [item(f"{ident}-1", desc=desc)]})
+    n = make_night(cfg, purr, FakeRunner([]), hour=5)
     sweep_pass(n)
-    assert plane.calls == [] and n.report.stop_reason == "cutoff"
+    assert purr.calls == [] and n.report.stop_reason == "cutoff"
 
 
-# -- ATC order (ATC-7) ------------------------------------------------------------
+# -- Purr order (Purr-7) ------------------------------------------------------------
 def test_sweep_visits_projects_in_board_order(cfg):
     projects = {
         "ZED": ProjectConfig("ZED", "nakomis/zed", False, ""),
         "ALPHA": ProjectConfig("ALPHA", "nakomis/alpha", False, ""),
     }
-    plane = FakePlane({"ALPHA": [item("ALPHA-1")], "ZED": [item("ZED-1")]})
-    n = make_night(cfg, plane, FakeRunner([]), dry_run=True, projects=projects)
+    purr = FakePurr({"ALPHA": [item("ALPHA-1")], "ZED": [item("ZED-1")]})
+    n = make_night(cfg, purr, FakeRunner([]), dry_run=True, projects=projects)
     sweep_pass(n)
     assert n.report.planned == ["sweep ZED: 1 item(s)", "sweep ALPHA: 1 item(s)"]
 
@@ -344,10 +344,10 @@ def test_sweep_visits_projects_in_board_order(cfg):
 def test_sweep_runs_the_batch_holding_the_top_priority_item_first(cfg):
     cfg = replace(cfg, limits=replace(cfg.limits, sweep_batch_items=2))
     refs = [f"HOME-{i}" for i in range(1, 7)]
-    plane = FakePlane({"HOME": [item(r) for r in refs]})
+    purr = FakePurr({"HOME": [item(r) for r in refs]})
     runner = FakeRunner([verdicts(), verdicts(), verdicts()])
     priority = {"HOME-5": 0, "HOME-2": 1, "HOME-6": 2, "HOME-1": 3, "HOME-3": 4, "HOME-4": 5}
-    n = make_night(cfg, plane, runner, priority=priority)
+    n = make_night(cfg, purr, runner, priority=priority)
     sweep_pass(n)
     batches = [re.findall(r"<<<ITEM (HOME-\d+)", b[2]) for b in runner.briefs]
     best = [min(priority[r] for r in b) for b in batches]

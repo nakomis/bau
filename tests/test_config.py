@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 import bau
-from bau.config import AtcConfig, Limits, Nudge, bau_home, load_config, paused_reader
+from bau.config import KeychainRef, Limits, Nudge, bau_home, load_config, paused_reader
 
 
 def test_bau_home_is_the_env_var_expanded_else_application_support(tmp_path, monkeypatch):
@@ -23,13 +23,13 @@ def test_loads_every_section(tmp_path: Path, monkeypatch):
     assert cfg.nudge == Nudge(5, 5, 10, 14, 5, 3, 10, 7)
     assert cfg.models.fable_label == "BAU-fable"
     assert cfg.github_app.private_key.account == "github-app-key"
-    assert cfg.plane.client_cert == home / "config" / "cere.crt.pem"
-    assert cfg.plane.client_key == home / "config" / "cere.key.pem"
+    assert cfg.purr.url == "https://purr.nakomis.com"
+    assert cfg.purr.api_key == KeychainRef("purr", "bau-api-key")
+    assert cfg.identities.owner_actor == "martin" and cfg.identities.worker_actor == "bau"
     assert cfg.paths.pause_file == home / "state" / "paused"
-    assert cfg.paths.atc_cache == home / "state" / "atc-cache.json"
+    assert cfg.paths.board_cache == home / "state" / "board-cache.json"
     assert cfg.paths.repos == home / "repos" and cfg.paths.work == home / "work"
     assert cfg.container.proxy == "http://bau-egress:8888"
-    assert cfg.atc == AtcConfig("https://atc.plane.home.nakomis.com")
 
 
 @pytest.mark.parametrize("text", ["- a\n- b\n", "just a string\n"])
@@ -67,12 +67,13 @@ def test_overlay_merges_nested_keys(tmp_path):
 
 def test_overlay_paths_expand_bau_home_and_tilde(tmp_path):
     (tmp_path / "host.yaml").write_text(
-        "paths:\n  repos: ${BAU_HOME}/elsewhere\n  work: ~/w\nplane:\n  client_cert: ${BAU_HOME}/c.pem\n"
+        "paths:\n  repos: ${BAU_HOME}/elsewhere\n  work: ~/w\npurr:\n  url: https://purr.sandbox.nakomis.com/\n"
     )
     cfg = load_config(tmp_path)
     assert cfg.paths.repos == bau_home() / "elsewhere"
     assert cfg.paths.work == Path("~/w").expanduser()
-    assert cfg.plane.client_cert == bau_home() / "c.pem"
+    assert cfg.purr.url == "https://purr.sandbox.nakomis.com"
+    assert cfg.purr.api_key.account == "bau-api-key"  # sibling kept
     assert cfg.paths.snapshot == bau_home() / "state" / "state.json"  # sibling kept
 
 
@@ -116,7 +117,7 @@ def test_paused_reader_is_the_pause_file_only(tmp_path: Path, capsys):
     assert read() is False
 
 
-def test_real_defaults_point_at_atc():
+def test_real_defaults_point_at_purr():
     cfg = load_config(Path(__file__).parent.parent / "config")
-    assert cfg.atc.url == "https://atc.plane.home.nakomis.com"
-    assert cfg.paths.atc_cache == bau_home() / "state" / "atc-cache.json"
+    assert cfg.purr.url == "https://purr.nakomis.com"
+    assert cfg.paths.board_cache == bau_home() / "state" / "board-cache.json"

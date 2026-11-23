@@ -131,8 +131,7 @@ export default function App() {
             )}
             {(snap.unreadable ?? []).length > 0 && (
               <p className="mt-4 text-sm text-dim">
-                BAU can't read these Plane projects (is bau a member?):{' '}
-                {(snap.unreadable ?? []).join(', ')}
+                BAU can't read these Purr projects: {(snap.unreadable ?? []).join(', ')}
               </p>
             )}
             <Questions

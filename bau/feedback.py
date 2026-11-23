@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from bau.github import IssueComment, Review, Thread, ThreadComment
-from bau.plane import Comment
+from bau.purr import Comment
 
 WORKER_MARK = "[bau]"
 
@@ -33,14 +33,14 @@ class GhItem:
 @dataclass(frozen=True)
 class Feedback:
     threads: list[Thread] = field(default_factory=list)
-    plane_comments: list[Comment] = field(default_factory=list)
+    purr_comments: list[Comment] = field(default_factory=list)
     gh_items: list[GhItem] = field(default_factory=list)
     conflict: bool = False
     ci_red: bool = False
 
     @property
     def empty(self) -> bool:
-        return not (self.threads or self.plane_comments or self.gh_items or self.conflict or self.ci_red)
+        return not (self.threads or self.purr_comments or self.gh_items or self.conflict or self.ci_red)
 
 
 def _login(login: str) -> str:
@@ -66,14 +66,14 @@ def pending_threads(threads: list[Thread], owner_login: str, worker_login: str) 
     return out
 
 
-def pending_plane_comments(comments: list[Comment], owner_email: str, worker_email: str) -> list[Comment]:
+def pending_purr_comments(comments: list[Comment], owner_actor: str, worker_actor: str) -> list[Comment]:
     acked_ids: set[str] = set()
     for c in comments:
-        if c.author_email == worker_email:
+        if c.author == worker_actor:
             for other in comments:
                 if ack_marker(other.id) in c.text:
                     acked_ids.add(other.id)
-    return [c for c in comments if c.author_email == owner_email and c.id not in acked_ids]
+    return [c for c in comments if c.author == owner_actor and c.id not in acked_ids]
 
 
 REVIEW_STATES_WITH_FEEDBACK = ("COMMENTED", "CHANGES_REQUESTED")

@@ -66,8 +66,8 @@ class Models:
 @dataclass(frozen=True)
 class Identities:
     github_login: str
-    owner_plane_email: str
-    worker_plane_email: str
+    owner_actor: str
+    worker_actor: str
     worker_github_login: str
 
 
@@ -79,17 +79,9 @@ class GitHubAppConfig:
 
 
 @dataclass(frozen=True)
-class PlaneConfig:
+class PurrConfig:
     url: str
-    workspace: str
     api_key: KeychainRef
-    client_cert: Path | None
-    client_key: Path | None
-
-
-@dataclass(frozen=True)
-class AtcConfig:
-    url: str
 
 
 @dataclass(frozen=True)
@@ -104,7 +96,7 @@ class Paths:
     logs: Path
     snapshot: Path
     pause_file: Path
-    atc_cache: Path
+    board_cache: Path
     lock: Path
 
 
@@ -122,12 +114,11 @@ class Config:
     models: Models
     identities: Identities
     github_app: GitHubAppConfig
-    plane: PlaneConfig
+    purr: PurrConfig
     claude: ClaudeConfig
     paths: Paths
     container: Container
     nudge: Nudge
-    atc: AtcConfig
 
 
 @dataclass(frozen=True)
@@ -203,18 +194,14 @@ def load_config(config_dir: Path) -> Config:
             installation_id=int(raw["github_app"]["installation_id"]),
             private_key=_keychain(raw["github_app"]["private_key"]),
         ),
-        plane=PlaneConfig(
-            url=raw["plane"]["url"].rstrip("/"),
-            workspace=raw["plane"]["workspace"],
-            api_key=_keychain(raw["plane"]["api_key"]),
-            client_cert=_path(raw["plane"].get("client_cert")),
-            client_key=_path(raw["plane"].get("client_key")),
+        purr=PurrConfig(
+            url=raw["purr"]["url"].rstrip("/"),
+            api_key=_keychain(raw["purr"]["api_key"]),
         ),
         claude=ClaudeConfig(oauth_token=_keychain(raw["claude"]["oauth_token"])),
         paths=Paths(**{k: _path(v) for k, v in raw["paths"].items()}),
         container=Container(**raw["container"]),
         nudge=Nudge(**raw["nudge"]),
-        atc=AtcConfig(url=raw["atc"]["url"].rstrip("/")),
     )
 
 

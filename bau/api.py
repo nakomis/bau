@@ -25,7 +25,7 @@ from bau.checkout import Repos
 from bau.config import Config, ProjectConfig
 from bau.github import GitHubClient
 from bau.markers import Answer
-from bau.plane import PlaneClient
+from bau.purr import PurrClient
 from bau.snapshot import drop_open_pr, drop_question, read_snapshot
 
 log = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ class AnswersBody(BaseModel):
 def create_app(
     cfg: Config,
     projects: dict[str, ProjectConfig],
-    plane: PlaneClient,
+    purr: PurrClient,
     github_factory: Callable[[str], GitHubClient],
     repos: Repos,
     static_dir: Path | None,
@@ -119,12 +119,12 @@ def create_app(
         try:
             r = abandon(
                 ref,
-                plane=plane,
+                purr=purr,
                 github_factory=github_factory,
                 repos=repos,
                 projects=projects,
                 worker_login=cfg.identities.worker_github_login,
-                worker_email=cfg.identities.worker_plane_email,
+                worker_actor=cfg.identities.worker_actor,
                 note=body.note if body else "",
                 lock_path=cfg.paths.lock,
             )
@@ -180,9 +180,9 @@ def create_app(
                 body.round,
                 body.asked_at,
                 answers,
-                plane=plane,
+                purr=purr,
                 projects=projects,
-                worker_email=cfg.identities.worker_plane_email,
+                worker_actor=cfg.identities.worker_actor,
                 lock_path=lock_path,
             ),
         )
@@ -193,7 +193,7 @@ def create_app(
             ref,
             "not-bau",
             lambda: mark_not_bau(
-                ref, body.note if body else "", plane=plane, projects=projects, lock_path=lock_path
+                ref, body.note if body else "", purr=purr, projects=projects, lock_path=lock_path
             ),
         )
 
