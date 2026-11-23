@@ -8,7 +8,7 @@ export type OpenPr = {
   ci: 'green' | 'red' | 'pending' | 'none';
   draft: boolean;
   unresolved_comments: number;
-  plane_url: string;
+  purr_url: string;
 };
 export type DeployRow = {
   repo: string;
@@ -37,7 +37,7 @@ export type QuestionRow = {
   repo: string;
   ref: string;
   title: string;
-  plane_url: string;
+  purr_url: string;
   repo_url: string;
   asked_at: string;
   age_days: number;

@@ -9,15 +9,15 @@ from pathlib import Path
 
 from bau.checkout import Repos
 from bau.github import PR, IssueComment, Review, Thread
-from bau.plane import Comment, Item, html_to_text, markdown_to_html
+from bau.purr import Comment, Item
 from bau.session import SessionResult
 
 
-class FakePlane:
+class FakePurr:
     def __init__(self, items: dict[str, list[Item]], comments: dict[str, list[Comment]] | None = None):
         self.items, self.comments_by_ref, self.calls = items, comments or {}, []
         self.unreachable: Exception | None = None
-        self.forbidden: set[str] = set()  # projects BAU's Plane account cannot read
+        self.forbidden: set[str] = set()  # projects BAU's Purr account cannot read
 
     def list_items(self, identifier, label):
         return [i for i in self.items.get(identifier, []) if label in i.labels]
@@ -42,21 +42,19 @@ class FakePlane:
     def comments(self, ref):
         return self.comments_by_ref.get(ref, [])
 
-    def project_url(self, ref):
-        return f"https://plane.test/{ref}"
+    def item_url(self, ref):
+        return f"https://purr.test/{ref}"
 
-    def _project(self, identifier):
+    def project(self, identifier):
         if self.unreachable:
             raise self.unreachable
         if identifier in self.forbidden:
-            raise RuntimeError(f"Plane GET /projects/{identifier}/states/ -> 403")
+            raise RuntimeError(f"Purr GET /projects/{identifier}/states/ -> 403")
         return {"project": {"identifier": identifier}}
 
     def comment(self, ref, markdown):
         self.calls.append(("comment", (ref, markdown)))
-        self.comments_by_ref.setdefault(ref, []).append(
-            Comment(f"c{len(self.calls)}", "bau@nakomis.com", "", html_to_text(markdown_to_html(markdown)))
-        )
+        self.comments_by_ref.setdefault(ref, []).append(Comment(f"c{len(self.calls)}", "bau", "", markdown))
         return "cid"
 
     def set_state(self, ref, state):
@@ -68,9 +66,9 @@ class FakePlane:
         for items in self.items.values():
             items[:] = [replace(i, assignees=assignees) if i.ref == ref else i for i in items]
 
-    def assign(self, ref, email):
-        self.calls.append(("assign", (ref, email)))
-        self._reassign(ref, [email])
+    def assign(self, ref, actor):
+        self.calls.append(("assign", (ref, actor)))
+        self._reassign(ref, [actor])
 
     def unassign(self, ref):
         self.calls.append(("unassign", (ref,)))

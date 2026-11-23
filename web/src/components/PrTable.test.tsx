@@ -13,7 +13,7 @@ const row: OpenPr = {
   ci: 'green',
   draft: false,
   unresolved_comments: 2,
-  plane_url: 'https://plane.home.nakomis.com/nakomis/browse/HOME-42/',
+  purr_url: 'https://purr.nakomis.com/tasks/HOME-42',
 };
 
 describe('PrTable', () => {
@@ -24,9 +24,9 @@ describe('PrTable', () => {
       'href',
       'https://github.com/nakomis/home-infra/pull/7',
     );
-    expect(screen.getByRole('link', { name: /Plane/ })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /Purr/ })).toHaveAttribute(
       'href',
-      'https://plane.home.nakomis.com/nakomis/browse/HOME-42/',
+      'https://purr.nakomis.com/tasks/HOME-42',
     );
     expect(screen.getByText('2 unresolved')).toBeInTheDocument();
     expect(screen.getByTitle('green')).toBeInTheDocument();
@@ -43,7 +43,7 @@ describe('PrTable', () => {
   it('renders unsafe URLs as plain text, not links', () => {
     for (const bad of ['javascript:alert(1)', 'data:text/html,x', 'http://x', 'garbage']) {
       const { unmount } = render(
-        <PrTable rows={[{ ...row, url: bad, plane_url: bad }]} onAbandon={vi.fn()} />,
+        <PrTable rows={[{ ...row, url: bad, purr_url: bad }]} onAbandon={vi.fn()} />,
       );
       expect(screen.queryByRole('link')).not.toBeInTheDocument();
       expect(screen.getByText(/HOME-42: Rotate logs/)).toBeInTheDocument();

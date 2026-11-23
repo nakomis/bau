@@ -1,4 +1,4 @@
-# bau — Overnight BAU maintenance worker: Plane items in, pull requests out
+# bau — Overnight BAU maintenance worker: Purr items in, pull requests out
 
 <img src="docs/logo.png" alt="bau logo" width="200" align="right"/>
 
@@ -25,7 +25,7 @@ If you find this useful, please consider buying me a coffee:
 
 ## What it is
 
-BAU ("business as usual") is a nightly worker that runs on Cere, picks up Plane work items
+BAU ("business as usual") is a nightly worker that runs on Cere, picks up Purr work items
 labelled `BAU`, works each one in a disposable Linux container, raises one pull request per
 item, and never merges or deploys. Martin reviews the PRs when he gets round to it, from
 `bau.home.nakomis.com`, and BD-1 shows how many are waiting.
@@ -48,7 +48,7 @@ cut-off, and per-session budget and wall-clock limits, so the worker never eats 
 
 | Path | Purpose |
 |------|---------|
-| `bau/` | Host-side Python: policy, Plane and GitHub clients, the nightly loop, the CLI |
+| `bau/` | Host-side Python: policy, Purr and GitHub clients, the nightly loop, the CLI |
 | `container/` | The agent image and the egress allow-list proxy |
 | `config/` | `host.example.yaml`, documenting the per-host overlay (policy is in `bau/defaults.yaml`, packaged in the wheel) |
 | `scripts/` | `build-bundle.sh`, which builds the release bundle |
@@ -59,6 +59,23 @@ cut-off, and per-session budget and wall-clock limits, so the worker never eats 
 ## Install on Cere
 
 CI builds each release: a bundle (`bau-<version>.tar.gz`: wheel, hashed requirements, launchd templates, compose file) published as the GitHub release `bau-v<version>`, and two `linux/arm64` images pushed to `registry.home.nakomis.com`. Cere installs a pinned version through the home-servers Ansible play (BAU-25; `bau_version` in `cere/ansible`). See `docs/runbook.md` for the layout, keychain items, upgrade and rollback.
+
+## Moving Cere to Purr
+
+BAU used to work from Plane and ATC, both retired on 23 November 2026. It now reads and writes [Purr](https://purr.nakomis.com) and has no client certificate for it. To switch Cere over once this version is installed:
+
+1. Load the API key (actor `bau`) into the login keychain of the `nakomis` user on Cere:
+
+   ```bash
+   security add-generic-password -U -s purr -a bau-api-key \
+     -w "$(aws ssm get-parameter --name /purr/prod/api-keys/bau --with-decryption \
+           --query Parameter.Value --output text)"
+   ```
+
+2. Edit the host overlay (`$BAU_HOME/config/host.yaml`, rendered by Ansible): delete any `plane:` or `atc:` block and rename `paths.atc_cache` to `paths.board_cache`. An unknown top-level key is an error, so a leftover `plane:` stops BAU starting. The defaults already point at `https://purr.nakomis.com`.
+3. Remove the pause: `rm "$BAU_HOME/state/paused"`.
+
+The project list comes from Purr: each project's metadata (`repo`, `deployMethod`, `deployAction`, `bauEnabled`) is edited in Purr, not here. See `docs/runbook.md`.
 
 ## Development
 

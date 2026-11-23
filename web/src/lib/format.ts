@@ -50,8 +50,8 @@ export function isFailedStop(reason: unknown): boolean {
   return reason.startsWith('failed') || reason.startsWith('preflight') || reason === 'rejected';
 }
 
-/** The only hosts the snapshot's links may point at: GitHub pull requests and Plane items. */
-const LINK_HOSTS = new Set(['github.com', 'plane.home.nakomis.com']);
+/** The only hosts the snapshot's links may point at: GitHub pull requests and Purr items. */
+const LINK_HOSTS = new Set(['github.com', 'purr.nakomis.com']);
 
 /** Returns the URL only if it is https on an allowed host; anything else (javascript:, data:, http:, other hosts, garbage) is dropped. */
 export function safeHref(url: string | undefined): string | undefined {
@@ -104,7 +104,7 @@ export async function fetchState(): Promise<Snapshot> {
   return normaliseSnapshot(raw);
 }
 
-/** POST /abandon/{ref}; resolves to the Plane state the item was restored to. */
+/** POST /abandon/{ref}; resolves to the Purr state the item was restored to. */
 export async function abandon(ref: string, note: string): Promise<string> {
   const r = await fetch(`/abandon/${encodeURIComponent(ref)}`, {
     method: 'POST',

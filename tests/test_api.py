@@ -8,7 +8,7 @@ import bau.version
 from bau.api import create_app, static_dir
 from bau.config import ProjectConfig
 from bau.lock import run_lock
-from tests.fakes.clients import FakeGitHub, FakePlane, FakeRepos
+from tests.fakes.clients import FakeGitHub, FakePurr, FakeRepos
 from tests.test_abandon import item, picked
 
 PROJECTS = {"HOME": ProjectConfig("HOME", "nakomis/home-infra", True, "")}
@@ -16,13 +16,13 @@ TOKEN = "s3cret-token"
 AUTH = {"X-Bau-Proxy-Token": TOKEN}
 
 
-def client(cfg, tmp_path, plane=None, static="make"):
+def client(cfg, tmp_path, purr=None, static="make"):
     if static == "make":
         static = tmp_path / "web"
         static.mkdir(exist_ok=True)
         (static / "index.html").write_text("<h1>bau</h1>")
     app = create_app(
-        cfg, PROJECTS, plane or FakePlane({}), lambda r: FakeGitHub(), FakeRepos(tmp_path), static, TOKEN
+        cfg, PROJECTS, purr or FakePurr({}), lambda r: FakeGitHub(), FakeRepos(tmp_path), static, TOKEN
     )
     return TestClient(app)
 
@@ -74,22 +74,22 @@ def test_missing_static_dir_serves_api_only(cfg, tmp_path):
 
 
 def test_abandon_without_token_is_forbidden(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
-    r = client(cfg, tmp_path, plane).post("/abandon/HOME-42")
+    purr = FakePurr({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    r = client(cfg, tmp_path, purr).post("/abandon/HOME-42")
     assert r.status_code == 403 and r.json() == {"error": "forbidden"}
-    assert not plane.calls
+    assert not purr.calls
 
 
 def test_abandon_with_wrong_token_is_forbidden(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
-    r = client(cfg, tmp_path, plane).post("/abandon/HOME-42", headers={"X-Bau-Proxy-Token": "nope"})
+    purr = FakePurr({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    r = client(cfg, tmp_path, purr).post("/abandon/HOME-42", headers={"X-Bau-Proxy-Token": "nope"})
     assert r.status_code == 403 and r.json() == {"error": "forbidden"}
-    assert not plane.calls
+    assert not purr.calls
 
 
 def test_abandon_route(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
-    c = client(cfg, tmp_path, plane)
+    purr = FakePurr({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    c = client(cfg, tmp_path, purr)
     r = c.post("/abandon/HOME-42", json={"note": "nah"}, headers=AUTH)
     assert r.status_code == 200 and r.json() == {"ref": "HOME-42", "pr": None, "restored_state": "Ready"}
     r2 = c.post("/abandon/HOME-42", headers=AUTH)
@@ -97,9 +97,9 @@ def test_abandon_route(cfg, tmp_path):
 
 
 def test_abandon_during_run_is_409(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    purr = FakePurr({"HOME": [item()]}, comments={"HOME-42": [picked()]})
     with run_lock(cfg.paths.lock):
-        r = client(cfg, tmp_path, plane).post("/abandon/HOME-42", headers=AUTH)
+        r = client(cfg, tmp_path, purr).post("/abandon/HOME-42", headers=AUTH)
     assert r.status_code == 409
     assert r.json() == {"error": "another BAU operation is in progress; try again shortly"}
 
@@ -126,7 +126,7 @@ def test_unknown_project_is_400(cfg, tmp_path):
 
 
 def test_unexpected_error_is_500_json_without_detail(cfg, tmp_path):
-    class Boom(FakePlane):
+    class Boom(FakePurr):
         def comments(self, ref):
             raise RuntimeError("secret-token-abc")
 
@@ -143,21 +143,21 @@ def _snap(*refs):
 def test_abandon_drops_the_pr_from_the_snapshot(cfg, tmp_path):
     cfg.paths.snapshot.parent.mkdir(parents=True, exist_ok=True)
     cfg.paths.snapshot.write_text(json.dumps(_snap("HOME-42", "HOME-43")))
-    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
-    c = client(cfg, tmp_path, plane)
+    purr = FakePurr({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    c = client(cfg, tmp_path, purr)
     assert c.post("/abandon/HOME-42", headers=AUTH).status_code == 200
     assert [p["ref"] for p in c.get("/state.json").json()["open_prs"]] == ["HOME-43"]
 
 
 def test_abandon_leaves_a_corrupt_or_missing_snapshot_alone(cfg, tmp_path):
-    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
-    c = client(cfg, tmp_path, plane)
+    purr = FakePurr({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    c = client(cfg, tmp_path, purr)
     assert c.post("/abandon/HOME-42", headers=AUTH).status_code == 200
     assert not cfg.paths.snapshot.exists()
     cfg.paths.snapshot.parent.mkdir(parents=True, exist_ok=True)
     cfg.paths.snapshot.write_text("{not json")
-    plane = FakePlane({"HOME": [item()]}, comments={"HOME-42": [picked()]})
-    c = client(cfg, tmp_path, plane)
+    purr = FakePurr({"HOME": [item()]}, comments={"HOME-42": [picked()]})
+    c = client(cfg, tmp_path, purr)
     assert c.post("/abandon/HOME-42", headers=AUTH).status_code == 200
     assert cfg.paths.snapshot.read_text() == "{not json"
 
@@ -165,7 +165,7 @@ def test_abandon_leaves_a_corrupt_or_missing_snapshot_alone(cfg, tmp_path):
 # --- questions: /answers and /not-bau ---------------------------------------------------------
 
 from bau.markers import Question, questions_comment  # noqa: E402
-from bau.plane import Comment  # noqa: E402
+from bau.purr import Comment  # noqa: E402
 
 _QS = [Question("q1", "Which?", "Option A", "because")]
 _ASKED_AT = "2026-10-17T22:00:00Z"
@@ -177,8 +177,8 @@ _ANSWERS = {
 
 
 def _waiting(labels=("BAU", "bau-questions")):
-    asked = Comment("c1", "bau@nakomis.com", _ASKED_AT, questions_comment(1, "S", _QS))
-    return FakePlane({"HOME": [item(labels=labels)]}, comments={"HOME-42": [asked]})
+    asked = Comment("c1", "bau", _ASKED_AT, questions_comment(1, "S", _QS))
+    return FakePurr({"HOME": [item(labels=labels)]}, comments={"HOME-42": [asked]})
 
 
 def test_answers_and_not_bau_need_the_token(cfg, tmp_path):
@@ -193,17 +193,17 @@ def test_answers_route_posts_and_drops_the_question_row(cfg, tmp_path):
     cfg.paths.snapshot.write_text(
         json.dumps({"schema": 1, "questions": [{"ref": "HOME-42"}, {"ref": "HOME-43"}]})
     )
-    plane = _waiting()
-    c = client(cfg, tmp_path, plane)
+    purr = _waiting()
+    c = client(cfg, tmp_path, purr)
     r = c.post("/answers/HOME-42", json=_ANSWERS, headers=AUTH)
     assert r.status_code == 200 and r.json() == {"ref": "HOME-42"}
-    assert ("remove_labels", ("HOME-42", ["bau-questions"])) in plane.calls
+    assert ("remove_labels", ("HOME-42", ["bau-questions"])) in purr.calls
     assert [q["ref"] for q in c.get("/state.json").json()["questions"]] == ["HOME-43"]
 
 
 def test_answers_error_statuses(cfg, tmp_path):
-    def post(plane, body=_ANSWERS, ref="HOME-42"):
-        return client(cfg, tmp_path, plane).post(f"/answers/{ref}", json=body, headers=AUTH)
+    def post(purr, body=_ANSWERS, ref="HOME-42"):
+        return client(cfg, tmp_path, purr).post(f"/answers/{ref}", json=body, headers=AUTH)
 
     assert post(_waiting(), ref="nope").status_code == 400
     assert post(_waiting(), ref="ZZZ-1").json() == {"error": "unknown project"}
@@ -227,17 +227,17 @@ def test_answers_and_not_bau_during_run_are_409(cfg, tmp_path):
 
 
 def test_not_bau_route(cfg, tmp_path):
-    plane = _waiting()
-    c = client(cfg, tmp_path, plane)
+    purr = _waiting()
+    c = client(cfg, tmp_path, purr)
     r = c.post("/not-bau/HOME-42", json={"note": "nah"}, headers=AUTH)
     assert r.status_code == 200 and r.json() == {"ref": "HOME-42"}
-    assert ("add_labels", ("HOME-42", ["not-bau"])) in plane.calls
+    assert ("add_labels", ("HOME-42", ["not-bau"])) in purr.calls
     assert c.post("/not-bau/nope", headers=AUTH).status_code == 400
     assert c.post("/not-bau/ZZZ-1", headers=AUTH).status_code == 400
 
 
 def test_answers_unexpected_error_is_500_without_detail(cfg, tmp_path):
-    class Boom(FakePlane):
+    class Boom(FakePurr):
         def get_item(self, ref):
             raise RuntimeError("secret-token-abc")
 

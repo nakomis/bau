@@ -4,11 +4,11 @@ from bau.feedback import (
     ack_gh_marker,
     ack_marker,
     pending_gh_items,
-    pending_plane_comments,
+    pending_purr_comments,
     pending_threads,
 )
 from bau.github import IssueComment, Review, Thread, ThreadComment
-from bau.plane import Comment
+from bau.purr import Comment
 
 # GraphQL reports an App's login without the "[bot]" suffix that REST and config use.
 OWNER, WORKER, WORKER_CONFIG = "nakomis", "nakomis-bau", "nakomis-bau[bot]"
@@ -36,13 +36,13 @@ def test_owner_done_thanks_is_still_pending_so_the_worker_resolves_it():
     assert pending_threads([thread], OWNER, WORKER_CONFIG) == [thread]
 
 
-def test_plane_comments_pending_until_acked():
-    owner = Comment("c1", "martin@nakomis.com", "2026-10-16T00:00:00Z", "change approach")
-    ack = Comment("c2", "bau@nakomis.com", "2026-10-16T01:00:00Z", f"Acknowledged {ack_marker('c1')}")
-    assert pending_plane_comments([owner], "martin@nakomis.com", "bau@nakomis.com") == [owner]
-    assert pending_plane_comments([owner, ack], "martin@nakomis.com", "bau@nakomis.com") == []
-    later = Comment("c3", "martin@nakomis.com", "2026-10-16T02:00:00Z", "and this")
-    assert pending_plane_comments([owner, ack, later], "martin@nakomis.com", "bau@nakomis.com") == [later]
+def test_purr_comments_pending_until_acked():
+    owner = Comment("c1", "martin", "2026-10-16T00:00:00Z", "change approach")
+    ack = Comment("c2", "bau", "2026-10-16T01:00:00Z", f"Acknowledged {ack_marker('c1')}")
+    assert pending_purr_comments([owner], "martin", "bau") == [owner]
+    assert pending_purr_comments([owner, ack], "martin", "bau") == []
+    later = Comment("c3", "martin", "2026-10-16T02:00:00Z", "and this")
+    assert pending_purr_comments([owner, ack, later], "martin", "bau") == [later]
 
 
 def test_feedback_empty():

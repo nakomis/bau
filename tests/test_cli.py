@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bau.atc import AtcState, AtcUnavailable
+from bau.board import BoardState, BoardUnavailable
 from bau.cli import ClientFactory, build_parser, exit_code, main, snapshot_rows
 from bau.config import Nudge
 from bau.github import Token
@@ -41,7 +41,7 @@ def test_abnormal_stop_reasons_exit_one(reason):
 
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
 NUDGE = Nudge(5, 5, 10, 14, 5, 3, 10, 7)
-FRESH = AtcState({}, {}, False)
+FRESH = BoardState({}, {}, False)
 
 
 class FakePr:
@@ -67,9 +67,9 @@ class FakeGh:
         return "green"
 
 
-class FakePlane:
-    def project_url(self, ref):
-        return f"https://plane/{ref}"
+class FakePurr:
+    def item_url(self, ref):
+        return f"https://purr/{ref}"
 
     def list_items(self, ident, label):
         return [SimpleNamespace(state="Ready for test", ref=f"{ident}-9", name="Deploy me")]
@@ -86,21 +86,19 @@ def test_snapshot_rows_survives_one_repo_failing():
         "a/bad": FakeGh([], fail=True),
         "a/good": FakeGh([FakePr(1, "feat: x (HOME-3)"), FakePr(2, "no ref")]),
     }
-    cfg = SimpleNamespace(
-        identities=SimpleNamespace(worker_github_login="bot", worker_plane_email="bau@nakomis.com")
-    )
+    cfg = SimpleNamespace(identities=SimpleNamespace(worker_github_login="bot", worker_actor="bau"))
     logs = []
     open_rows, deploy_rows, _ = snapshot_rows(
-        cfg, projects, FakePlane(), lambda repo: ghs[repo], lambda: NOW, log=logs.append
+        cfg, projects, FakePurr(), lambda repo: ghs[repo], lambda: NOW, log=logs.append
     )
     assert [r.ref for r in open_rows] == ["HOME-3"]
     row = open_rows[0]
     assert isinstance(row, OpenPrRow)
-    assert (row.age_days, row.ci, row.unresolved_comments, row.plane_url) == (
+    assert (row.age_days, row.ci, row.unresolved_comments, row.purr_url) == (
         2,
         "green",
         1,
-        "https://plane/HOME-3",
+        "https://purr/HOME-3",
     )
     assert [(d.ref, d.action) for d in deploy_rows] == [("HOME-9", "run it")]
     assert any("a/bad" in str(m) for m in logs)
@@ -287,7 +285,7 @@ def test_cli_abandon_invalid_ref_exits_2(capsys):
 
     args = SimpleNamespace(ref="home-42", note="")
     cfg = SimpleNamespace(
-        identities=SimpleNamespace(worker_github_login="w", worker_plane_email="e"),
+        identities=SimpleNamespace(worker_github_login="w", worker_actor="e"),
         paths=SimpleNamespace(lock=Path("/nonexistent/run.lock")),
     )
     assert _abandon(args, cfg, ({}, P(), None, None, None, None, FRESH)) == 2
@@ -328,7 +326,7 @@ def test_run_waits_up_to_an_hour(run_world, monkeypatch):
 def test_snapshot_rows_builds_question_rows():
     from bau.config import ProjectConfig
     from bau.markers import Question, questions_comment
-    from bau.plane import Comment, Item
+    from bau.purr import Comment, Item
 
     def item(ref, labels):
         return Item(ref, ref.lower(), "p", f"Title {ref}", "", "Todo", labels, None, "2026-10-01T00:00:00Z")
@@ -336,15 +334,15 @@ def test_snapshot_rows_builds_question_rows():
     qs = [Question("q1", "Which one?", "A", "because")]
     comments = {
         "HOME-5": [
-            Comment("c1", "someone@else.com", "2026-10-01T00:00:00Z", "chatter"),
-            Comment("c2", "bau@nakomis.com", "2026-10-10T12:00:00Z", questions_comment(2, "Sum", qs)),
+            Comment("c1", "someone", "2026-10-01T00:00:00Z", "chatter"),
+            Comment("c2", "bau", "2026-10-10T12:00:00Z", questions_comment(2, "Sum", qs)),
         ],
-        "HOME-6": [Comment("c3", "bau@nakomis.com", "2026-10-10T12:00:00Z", "no marker here")],
+        "HOME-6": [Comment("c3", "bau", "2026-10-10T12:00:00Z", "no marker here")],
     }
 
     comments["NOREPO-1"] = comments["HOME-5"]
 
-    class QPlane(FakePlane):
+    class QPurr(FakePurr):
         def list_items(self, ident, label):
             if label != "bau-questions":
                 return []
@@ -359,9 +357,7 @@ def test_snapshot_rows_builds_question_rows():
         "HOME": ProjectConfig("HOME", "a/good", False),
         "NOREPO": ProjectConfig("NOREPO", None, False),
     }
-    cfg = SimpleNamespace(
-        identities=SimpleNamespace(worker_github_login="bot", worker_plane_email="bau@nakomis.com")
-    )
+    cfg = SimpleNamespace(identities=SimpleNamespace(worker_github_login="bot", worker_actor="bau"))
     logs = []
 
     def factory(repo):
@@ -369,7 +365,7 @@ def test_snapshot_rows_builds_question_rows():
         return FakeGh([])
 
     open_rows, deploy_rows, question_rows = snapshot_rows(
-        cfg, projects, QPlane(), factory, lambda: NOW, log=logs.append
+        cfg, projects, QPurr(), factory, lambda: NOW, log=logs.append
     )
     assert open_rows == [] and deploy_rows == []
     r = question_rows[0]
@@ -382,7 +378,7 @@ def test_snapshot_rows_builds_question_rows():
         2,
         "Sum",
     )
-    assert r.asked_at == "2026-10-10T12:00:00Z" and r.plane_url == "https://plane/HOME-5"
+    assert r.asked_at == "2026-10-10T12:00:00Z" and r.purr_url == "https://purr/HOME-5"
     assert r.questions == [{"id": "q1", "text": "Which one?", "recommendation": "A", "why": "because"}]
     norepo = [x for x in question_rows if x.ref == "NOREPO-1"][0]
     assert norepo.repo == "" and norepo.repo_url == ""
@@ -420,22 +416,20 @@ def test_snapshot_rows_keeps_previous_questions_when_plane_fails():
     from bau.config import ProjectConfig
     from bau.snapshot import nudge
 
-    class DownPlane(FakePlane):
+    class DownPurr(FakePurr):
         def list_items(self, ident, label):
-            raise RuntimeError("plane down")
+            raise RuntimeError("purr down")
 
     old = {
-        "repo": "a/good", "ref": "HOME-5", "title": "T", "plane_url": "p", "repo_url": "u",
+        "repo": "a/good", "ref": "HOME-5", "title": "T", "purr_url": "p", "repo_url": "u",
         "asked_at": "a", "age_days": 9, "round": 1, "summary": "s", "questions": [],
     }  # fmt: skip
     other = {**old, "ref": "OTHER-1"}
     projects = {"HOME": ProjectConfig("HOME", None, False)}
-    cfg = SimpleNamespace(
-        identities=SimpleNamespace(worker_github_login="bot", worker_plane_email="bau@nakomis.com")
-    )
+    cfg = SimpleNamespace(identities=SimpleNamespace(worker_github_login="bot", worker_actor="bau"))
     logs = []
     _, _, rows = snapshot_rows(
-        cfg, projects, DownPlane(), lambda r: None, lambda: NOW, log=logs.append,
+        cfg, projects, DownPurr(), lambda r: None, lambda: NOW, log=logs.append,
         previous_questions=[old, other],
     )  # fmt: skip
     assert [r.ref for r in rows] == ["HOME-5"] and rows[0].age_days == 9
@@ -448,22 +442,22 @@ def test_sweep_subcommand_is_gone():
         build_parser().parse_args(["sweep"])
 
 
-# -- ATC (ATC-7) -------------------------------------------------------------------
+# -- Purr (Purr-7) -------------------------------------------------------------------
 def test_run_passes_atc_priority_and_staleness_to_the_night(run_world, monkeypatch):
     from bau.snapshot import read_snapshot
 
-    stale = AtcState({}, {"HOME-1": 0}, True)
+    stale = BoardState({}, {"HOME-1": 0}, True)
     monkeypatch.setattr(run_world.cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW, stale))
 
     def run(self):
-        self.report.atc = self.kwargs["atc"]
+        self.report.board = self.kwargs["board"]
         return self.report
 
     monkeypatch.setattr(StubNight, "run", run)
     assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
     kwargs = StubNight.instances[0].kwargs
-    assert kwargs["priority"] == {"HOME-1": 0} and kwargs["atc"] == "stale"
-    assert read_snapshot(run_world.snapshot)["last_run"]["atc"] == "stale"
+    assert kwargs["priority"] == {"HOME-1": 0} and kwargs["board"] == "stale"
+    assert read_snapshot(run_world.snapshot)["last_run"]["board"] == "stale"
 
 
 def test_run_without_atc_or_cache_stops_preflight_atc(run_world, monkeypatch):
@@ -474,23 +468,23 @@ def test_run_without_atc_or_cache_stops_preflight_atc(run_world, monkeypatch):
     run_world.cfg.schedule = SimpleNamespace(timezone="Europe/London")
 
     def down(c, d):
-        raise AtcUnavailable("ATC GET /api/projects: 502")
+        raise BoardUnavailable("Purr GET /api/projects: 502")
 
     monkeypatch.setattr(run_world.cli, "wire", down)
-    assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == exit_code("preflight: atc")
+    assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == exit_code("preflight: purr")
     snap = read_snapshot(run_world.snapshot)
-    assert snap["last_run"]["stop_reason"] == "preflight: atc"
+    assert snap["last_run"]["stop_reason"] == "preflight: purr"
     assert snap["open_prs"] == [{"ref": "HOME-1"}]  # kept: no service was touched
     assert StubNight.instances == []
 
 
 def test_dry_run_without_atc_says_so_and_writes_nothing(run_world, monkeypatch, capsys):
     def down(c, d):
-        raise AtcUnavailable("no route")
+        raise BoardUnavailable("no route")
 
     monkeypatch.setattr(run_world.cli, "wire", down)
     assert run_world.cli.main(["run", "--dry-run", "--config", str(run_world.config_dir)]) == 1
-    assert "preflight: atc" in capsys.readouterr().out
+    assert "preflight: purr" in capsys.readouterr().out
     assert not run_world.snapshot.exists()
 
 
@@ -502,7 +496,7 @@ def test_locked_out_without_atc_still_records_locked(run_world, monkeypatch):
     run_world.cfg.schedule = SimpleNamespace(timezone="Europe/London")
 
     def down(c, d):
-        raise AtcUnavailable("no route")
+        raise BoardUnavailable("no route")
 
     monkeypatch.setattr(run_world.cli, "wire", down)
     monkeypatch.setattr(run_world.cli, "RUN_LOCK_WAIT", 0)
@@ -513,60 +507,60 @@ def test_locked_out_without_atc_still_records_locked(run_world, monkeypatch):
     assert read_snapshot(run_world.snapshot)["last_run"]["stop_reason"] == "locked"
 
 
-def test_wire_reads_projects_and_priority_from_atc(tmp_path, monkeypatch, cfg):
+def test_wire_reads_projects_and_priority_from_purr(tmp_path, monkeypatch, cfg):
 
     from bau import cli
-    from tests.test_atc import P_BAU, P_HOME, fake_atc
+    from tests.test_board import P_BAU, P_HOME, fake_board
 
     made = []
-    real = cli.AtcClient
+    real = cli.BoardClient
 
-    def client(url, cert, key):
-        made.append((url, cert, key))
-        return real(url, cert, key, transport=fake_atc(projects=[P_HOME, P_BAU], refs=["BAU-2"]))
+    def client(url, key):
+        made.append((url, key))
+        return real(url, key, transport=fake_board(projects=[P_HOME, P_BAU], refs=["BAU-2"]))
 
-    monkeypatch.setattr(cli, "AtcClient", client)
+    monkeypatch.setattr(cli, "BoardClient", client)
     monkeypatch.setattr(cli, "read_secret", lambda ref: "secret")
     monkeypatch.setattr(cli, "GitHubApp", lambda *a: SimpleNamespace())
-    monkeypatch.setattr(cli, "PlaneClient", lambda *a: SimpleNamespace())
-    projects, plane, app, factory, repos, clock, atc = cli.wire(cfg, tmp_path)
-    assert list(projects) == ["HOME", "BAU"] and atc.priority == {"BAU-2": 0} and not atc.stale
-    assert made == [("https://atc.plane.home.nakomis.com", cfg.plane.client_cert, cfg.plane.client_key)]
-    assert cfg.paths.atc_cache.exists()
+    monkeypatch.setattr(cli, "PurrClient", lambda *a: SimpleNamespace())
+    projects, purr, app, factory, repos, clock, board = cli.wire(cfg, tmp_path)
+    assert list(projects) == ["HOME", "BAU"] and board.priority == {"BAU-2": 0} and not board.stale
+    assert made == [("https://purr.nakomis.com", "secret")]
+    assert cfg.paths.board_cache.exists()
 
 
-def test_empty_atc_answer_is_recorded_as_empty(run_world, monkeypatch):
+def test_empty_purr_answer_is_recorded_as_empty(run_world, monkeypatch):
     from bau.snapshot import read_snapshot
 
-    empty = AtcState({}, {}, False, empty=True, fetched_at="2026-10-14T11:00:00+00:00")
+    empty = BoardState({}, {}, False, empty=True, fetched_at="2026-10-14T11:00:00+00:00")
     monkeypatch.setattr(run_world.cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW, empty))
 
     def run(self):
-        self.report.atc = self.kwargs["atc"]
+        self.report.board = self.kwargs["board"]
         return self.report
 
     monkeypatch.setattr(StubNight, "run", run)
     assert run_world.cli.main(["run", "--config", str(run_world.config_dir)]) == 0
-    assert StubNight.instances[0].kwargs["atc"] == "empty"
+    assert StubNight.instances[0].kwargs["board"] == "empty"
     last = read_snapshot(run_world.snapshot)["last_run"]
-    assert last["atc"] == "empty" and last["atc_age_hours"] is None
+    assert last["board"] == "empty" and last["board_age_hours"] is None
 
 
 def test_stale_snapshot_shows_the_cache_age(run_world, monkeypatch):
     from bau.snapshot import read_snapshot
 
-    stale = AtcState({}, {}, True, fetched_at="2026-10-13T00:00:00+00:00")  # NOW is 14 Oct 12:00 UTC
+    stale = BoardState({}, {}, True, fetched_at="2026-10-13T00:00:00+00:00")  # NOW is 14 Oct 12:00 UTC
     monkeypatch.setattr(run_world.cli, "wire", lambda c, d: ({}, None, None, None, None, lambda: NOW, stale))
 
     def run(self):
-        self.report.atc = self.kwargs["atc"]
+        self.report.board = self.kwargs["board"]
         return self.report
 
     monkeypatch.setattr(StubNight, "run", run)
     run_world.cli.main(["run", "--config", str(run_world.config_dir)])
     last = read_snapshot(run_world.snapshot)["last_run"]
-    assert last["atc"] == "stale"
-    assert last["atc_fetched_at"] == "2026-10-13T00:00:00+00:00" and last["atc_age_hours"] == 36.0
+    assert last["board"] == "stale"
+    assert last["board_fetched_at"] == "2026-10-13T00:00:00+00:00" and last["board_age_hours"] == 36.0
 
 
 @pytest.mark.parametrize(
@@ -579,14 +573,14 @@ def test_other_commands_without_atc_or_cache_fail_in_one_line(run_world, monkeyp
     run_world.snapshot.write_text(previous)
 
     def down(c, d):
-        raise AtcUnavailable("ATC GET /api/projects: ConnectError: no route")
+        raise BoardUnavailable("Purr GET /api/projects: ConnectError: no route")
 
     monkeypatch.setattr(run_world.cli, "wire", down)
     assert run_world.cli.main([*argv, "--config", str(run_world.config_dir)]) == 1
     out, err = capsys.readouterr()
     assert out == ""
     assert err.splitlines() == [
-        f"bau {argv[0]}: preflight: atc: ATC GET /api/projects: ConnectError: no route"
+        f"bau {argv[0]}: preflight: purr: Purr GET /api/projects: ConnectError: no route"
         " (and no cached copy); nothing done"
     ]
     assert run_world.snapshot.read_text() == previous
@@ -596,11 +590,11 @@ def test_serve_without_atc_or_cache_serves_with_no_projects(run_world, monkeypat
     served = {}
 
     def down(c, d):
-        raise AtcUnavailable("no route")
+        raise BoardUnavailable("no route")
 
     def services(cfg, state):
         served["state"] = state
-        return state.projects, "plane", "app", "factory", "repos", lambda: NOW, state
+        return state.projects, "purr", "app", "factory", "repos", lambda: NOW, state
 
     import bau.api
 
@@ -685,15 +679,17 @@ def test_serve_serves_the_packaged_dashboard(run_world, monkeypatch, tmp_path):
 
     served = {}
     dist = tmp_path / "dist"
-    monkeypatch.setattr(run_world.cli, "wire", lambda c, d: (_ for _ in ()).throw(AtcUnavailable("no route")))
+    monkeypatch.setattr(
+        run_world.cli, "wire", lambda c, d: (_ for _ in ()).throw(BoardUnavailable("no route"))
+    )
     monkeypatch.setattr(
         run_world.cli,
         "wire_services",
-        lambda cfg, state: (state.projects, "plane", "app", "factory", "repos", lambda: NOW, state),
+        lambda cfg, state: (state.projects, "purr", "app", "factory", "repos", lambda: NOW, state),
     )
     monkeypatch.setattr(bau.api, "static_dir", lambda: dist)
     monkeypatch.setattr(
-        bau.api, "create_app", lambda cfg, projects, plane, factory, repos, static, token: static
+        bau.api, "create_app", lambda cfg, projects, purr, factory, repos, static, token: static
     )
     monkeypatch.setattr(bau.api, "serve", lambda app, port: served.setdefault("static", app))
     assert run_world.cli.main(["serve", "--config", str(run_world.config_dir)]) == 0

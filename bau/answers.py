@@ -7,7 +7,7 @@ from bau.abandon import REF_PATTERN, RUN_IN_PROGRESS, InvalidRef, RunInProgress,
 from bau.config import ProjectConfig
 from bau.lock import run_lock
 from bau.markers import Answer, answers_comment, latest_asked
-from bau.plane import PlaneClient, split_ref
+from bau.purr import PurrClient, split_ref
 
 log = logging.getLogger(__name__)
 WAITING = "bau-questions"
@@ -55,18 +55,18 @@ def submit_answers(
     asked_at: str,
     answers: list[Answer],
     *,
-    plane: PlaneClient,
+    purr: PurrClient,
     projects: dict[str, ProjectConfig],
-    worker_email: str,
+    worker_actor: str,
     lock_path: Path | None,
 ) -> None:
     ref = _check_ref(ref, projects)
 
     def go() -> None:
-        item = plane.get_item(ref)
+        item = purr.get_item(ref)
         if WAITING not in item.labels:
             raise NotWaiting(f"{ref} is not waiting for answers")
-        asked = latest_asked(plane.comments(ref), worker_email)
+        asked = latest_asked(purr.comments(ref), worker_actor)
         if asked is None:
             raise NotWaiting(f"{ref} has no questions from BAU")
         # The same round number can be asked again after a description edit, so the timestamp counts too.
@@ -84,8 +84,8 @@ def submit_answers(
             if a.accepted and text != clean_answer(q.recommendation):
                 raise MissingAnswer(f"question {q.id} accepts a recommendation it was not given")
             cleaned.append(Answer(q.id, a.accepted, text))
-        plane.comment(ref, answers_comment(asked.round, asked.questions, cleaned))
-        plane.remove_labels(ref, [WAITING])
+        purr.comment(ref, answers_comment(asked.round, asked.questions, cleaned))
+        purr.remove_labels(ref, [WAITING])
 
     _locked(lock_path, go)
 
@@ -94,7 +94,7 @@ def mark_not_bau(
     ref: str,
     note: str,
     *,
-    plane: PlaneClient,
+    purr: PurrClient,
     projects: dict[str, ProjectConfig],
     lock_path: Path | None,
 ) -> None:
@@ -103,9 +103,9 @@ def mark_not_bau(
 
     def go() -> None:
         # not-bau, audit comment, then BAU comes off: a failure part-way never leaves a relabel untraced.
-        plane.add_labels(ref, ["not-bau"])
+        purr.add_labels(ref, ["not-bau"])
         suffix = f" Note: {note}" if note else ""
-        plane.comment(ref, "[bau] Marked not-bau by Martin from the BAU dashboard." + suffix)
-        plane.remove_labels(ref, ["BAU", WAITING])
+        purr.comment(ref, "[bau] Marked not-bau by Martin from the BAU dashboard." + suffix)
+        purr.remove_labels(ref, ["BAU", WAITING])
 
     _locked(lock_path, go)

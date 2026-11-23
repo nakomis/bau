@@ -138,8 +138,8 @@ export default function PrTable({ rows, onAbandon }: Props) {
                     <ExtLink className="underline" href={r.url}>
                       {r.ref}: {r.title}
                     </ExtLink>{' '}
-                    <ExtLink className="text-dim underline" href={r.plane_url}>
-                      Plane
+                    <ExtLink className="text-dim underline" href={r.purr_url}>
+                      Purr
                     </ExtLink>
                     {r.draft && <span className="ml-2 text-xs text-dim">draft</span>}
                   </td>

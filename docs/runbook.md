@@ -21,8 +21,7 @@ No `pnpm`, Node or `docker build` is needed on Cere: CI builds the dashboard, th
 | `$BAU_HOME/releases/<version>/` | One unpacked release bundle: `venv/`, `launchd/`, `compose.yml`, `.env`, `VERSION` |
 | `$BAU_HOME/current` | Symlink to the live release; the launchd jobs run `current/venv/bin/bau` |
 | `$BAU_HOME/config/host.yaml` | Host facts, deep-merged over the policy in the wheel (`bau/defaults.yaml`). Rendered by Ansible |
-| `$BAU_HOME/config/cere.crt.pem`, `cere.key.pem` | Plane client certificate and key (mode 0600) |
-| `$BAU_HOME/state/` | `state.json` (snapshot read by the dashboard), `paused`, `atc-cache.json`, `run.lock` |
+| `$BAU_HOME/state/` | `state.json` (snapshot read by the dashboard), `paused`, `board-cache.json`, `run.lock` |
 | `$BAU_HOME/repos` | Bare clones of the target repositories |
 | `$BAU_HOME/work` | Per-session checkouts |
 | `~/Library/Logs/BAU` | `bau-run.log`, `bau-snapshot.log`, `bau-api.log`, and per-session logs |
@@ -31,8 +30,9 @@ No `pnpm`, Node or `docker build` is needed on Cere: CI builds the dashboard, th
 
 Secrets are read from the macOS login keychain, service `bau` (`bau/secrets.py`). Never put them in a file in the repo.
 
-- `plane-api-key`: the Plane API key for the worker identity.
-  `security add-generic-password -s bau -a plane-api-key -w`
+- service `purr`, account `bau-api-key`: the Purr API key for the actor `bau` (it is not a `bau` service item). The key lives in SSM at `/purr/prod/api-keys/bau`; from a machine with AWS access:
+  `security add-generic-password -U -s purr -a bau-api-key -w "$(aws ssm get-parameter --name /purr/prod/api-keys/bau --with-decryption --query Parameter.Value --output text)"`
+  Purr has no client certificate and BAU needs none for it.
 - `github-app-key`: the GitHub App's private key (PEM).
   `security add-generic-password -s bau -a github-app-key -w "$(cat key.pem)"`
 - `claude-oauth-token`: the token from `claude setup-token`.
@@ -45,11 +45,11 @@ Check an item exists with `security find-generic-password -s bau -a <account>`. 
 
 ## Configuration
 
-Policy (schedule, limits, models, identities, the GitHub App ids, the Plane and ATC URLs) lives in `bau/defaults.yaml`, packaged in the wheel. It changes by pull request and release, so a rollback restores the policy that went with the code. It is never edited on the host.
+Policy (schedule, limits, models, identities, the GitHub App ids, the Purr URL) lives in `bau/defaults.yaml`, packaged in the wheel. It changes by pull request and release, so a rollback restores the policy that went with the code. It is never edited on the host.
 
-Only host facts go in `$BAU_HOME/config/host.yaml`, which is deep-merged over the defaults. It is optional; `config/host.example.yaml` documents every key you may override (the Plane client certificate paths, `paths.*`, `container.image`). An unknown top-level key is an error. Paths may use `${BAU_HOME}` and `~`.
+Only host facts go in `$BAU_HOME/config/host.yaml`, which is deep-merged over the defaults. It is optional; `config/host.example.yaml` documents every key you may override (`purr.url` for another Purr, `paths.*`, `container.image`). An unknown top-level key is an error. Paths may use `${BAU_HOME}` and `~`.
 
-The projects BAU works on come only from ATC; there is no project file (see "Adding a repository to BAU"). Pausing is only the `state/paused` file (see "Pause").
+The projects BAU works on come only from Purr; there is no project file (see "Adding a repository to BAU"). Pausing is only the `state/paused` file (see "Pause").
 
 ## Install
 
@@ -97,11 +97,11 @@ No new sessions start after the `no_new_sessions_after` cut-off in `bau/defaults
 
 ## Sweep
 
-Each night the sweep reads the open items of every BAU-enabled project in ATC and labels them itself, with an agent's verdict: `BAU` for items it judges small and well specified, `not-bau` for the rest. It posts a `[bau:swept]` comment on each item saying why, quoting the agent's reason as `the sweep agent said: "..."` with brackets and link schemes stripped. There is no summary item. Items labelled `BAU` then go through triage and the questions queue like any other. See `docs/superpowers/specs/2026-10-18-bau-questions-design.md`.
+Each night the sweep reads the open items of every BAU-enabled project in Purr and labels them itself, with an agent's verdict: `BAU` for items it judges small and well specified, `not-bau` for the rest. It posts a `[bau:swept]` comment on each item saying why, quoting the agent's reason as `the sweep agent said: "..."` with brackets and link schemes stripped. There is no summary item. Items labelled `BAU` then go through triage and the questions queue like any other. See `docs/superpowers/specs/2026-10-18-bau-questions-design.md`.
 
 An item is swept only if it is unlabelled (not `BAU`, `bau-questions`, `not-bau` or `blocked`), in a backlog or unstarted state, assigned to nobody but the worker, and Martin has not commented on or edited it for `sweep_owner_quiet_days` (in `bau/defaults.yaml`). Items go to the agent in batches of `sweep_batch_items`.
 
-Martin can overrule any verdict: remove or change the label in Plane. A `not-bau` label permanently excludes an item from the sweep.
+Martin can overrule any verdict: remove or change the label in Purr. A `not-bau` label permanently excludes an item from the sweep.
 
 The sweep shares `state/run.lock` with the night and `bau abandon`: `bau run` waits up to an hour for the lock and, if it still cannot start, records `stop_reason: locked` in `state.json` and exits 0.
 
@@ -135,7 +135,7 @@ The job stays unloaded until (once BAU-25 lands) the Ansible play (tag `bau`) or
 
 `bau serve` runs under launchd as `com.nakomis.bau-api` on port 8800, behind Leia (which adds mTLS and the proxy token). It serves `/state.json`, the built dashboard (packaged in the wheel as `bau/web_dist`), and `POST /abandon/{ref}`.
 
-The dashboard is a single page at `https://bau.home.nakomis.com/` (mTLS, Nakomis Home CA client certificate). It shows an overall tier, open PRs grouped by repository (each linking to GitHub and Plane), the last run, what is waiting to deploy, and the snapshot's age. The tier mirrors BD-1's BAU row (`mac/conversation-memory-forwarder/src/status.rs` in home-servers; the same rules live in `web/src/lib/tier.ts` and must change together):
+The dashboard is a single page at `https://bau.home.nakomis.com/` (mTLS, Nakomis Home CA client certificate). It shows an overall tier, open PRs grouped by repository (each linking to GitHub and Purr), the last run, what is waiting to deploy, and the snapshot's age. The tier mirrors BD-1's BAU row (`mac/conversation-memory-forwarder/src/status.rs` in home-servers; the same rules live in `web/src/lib/tier.ts` and must change together):
 
 | Tier | When |
 |------|------|
@@ -202,5 +202,5 @@ The `rm` line stops launchd loading the jobs again at login. `$BAU_HOME` holds t
 
 1. In GitHub, open Settings → Applications → Installed GitHub Apps → **nakomis-bau** → Configure, and tick the repository under "Only select repositories".
 2. Make sure `main` there is protected (a pull request is required and force pushes are blocked); BAU refuses unprotected repositories.
-3. In ATC (`atc.plane.home.nakomis.com`, or the Plane MCP's `set_project_meta`), set the project's repository, whether it deploys and the deploy action, and turn on `bau_enabled`. BAU reads this at the start of each run.
-4. Add `bau@nakomis.com` to that Plane project as a member.
+3. In Purr (`https://purr.nakomis.com`, project settings, or the Purr MCP), set the project's metadata: `repo`, `deployMethod` (any value means it deploys), `deployAction`, and `bauEnabled`. BAU reads this at the start of each run, and takes the order of projects from the Purr board (In progress, then Up next, then Backlog).
+4. Nothing to grant: the `bau` API key can read every project.

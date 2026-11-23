@@ -23,7 +23,7 @@ def make_config(tmp_path: Path) -> Config:
   logs: {tmp_path}/logs
   snapshot: {tmp_path}/state.json
   pause_file: {tmp_path}/paused
-  atc_cache: {tmp_path}/atc-cache.json
+  board_cache: {tmp_path}/board-cache.json
   lock: {tmp_path}/run.lock
 """
     )

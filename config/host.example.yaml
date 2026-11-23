@@ -1,10 +1,17 @@
 # Copy to $BAU_HOME/config/host.yaml (Ansible renders it). Everything here is an optional
 # override of bau/defaults.yaml; any top-level key must exist in the defaults.
-# ${BAU_HOME} and ~ are expanded in paths.* and the plane client certificate paths.
+# ${BAU_HOME} and ~ are expanded in paths.*.
 #
-# plane:
-#   client_cert: ${BAU_HOME}/config/cere.crt.pem
-#   client_key: ${BAU_HOME}/config/cere.key.pem
+# Purr needs no client certificate. The API key (actor `bau`) is read from the login keychain,
+# service `purr`, account `bau-api-key`. Load it from SSM on a machine with AWS access:
+#   security add-generic-password -U -s purr -a bau-api-key \
+#     -w "$(aws ssm get-parameter --name /purr/prod/api-keys/bau --with-decryption \
+#           --query Parameter.Value --output text)"
+# Only set `purr:` here to point at another Purr (say the sandbox):
+#
+# purr:
+#   url: https://purr.sandbox.nakomis.com
+#   api_key: {service: purr, account: bau-api-key}
 #
 # paths:
 #   repos: ${BAU_HOME}/repos
@@ -12,7 +19,7 @@
 #   logs: ~/Library/Logs/BAU
 #   snapshot: ${BAU_HOME}/state/state.json
 #   pause_file: ${BAU_HOME}/state/paused
-#   atc_cache: ${BAU_HOME}/state/atc-cache.json
+#   board_cache: ${BAU_HOME}/state/board-cache.json
 #   lock: ${BAU_HOME}/state/run.lock
 #
 # container:

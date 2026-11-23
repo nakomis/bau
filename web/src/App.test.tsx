@@ -22,7 +22,7 @@ const snap: Snapshot = {
       ci: 'green',
       draft: false,
       unresolved_comments: 0,
-      plane_url: 'https://plane.home.nakomis.com/nakomis/browse/HOME-42/',
+      purr_url: 'https://purr.nakomis.com/tasks/HOME-42',
     },
   ],
   deploy_pending: [
@@ -239,7 +239,7 @@ describe('App', () => {
     repo: 'nakomis/home-infra',
     ref: 'HOME-9',
     title: 'Ask me',
-    plane_url: 'https://plane/HOME-9',
+    purr_url: 'https://purr/HOME-9',
     repo_url: 'https://github.com/nakomis/home-infra',
     asked_at: '2026-10-13T01:00:00Z',
     age_days: 1,
@@ -310,12 +310,10 @@ describe('App', () => {
     ).toBeInTheDocument();
   });
 
-  it('lists Plane projects BAU cannot read', async () => {
+  it('lists Purr projects BAU cannot read', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(respond({ ...snap, unreadable: ['KATOO'] })));
     await mount();
-    expect(
-      screen.getByText("BAU can't read these Plane projects (is bau a member?): KATOO"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("BAU can't read these Purr projects: KATOO")).toBeInTheDocument();
   });
 
   it('refetches after a refused send so a new round appears', async () => {

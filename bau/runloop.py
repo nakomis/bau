@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from bau.atc import priority_key
+from bau.board import priority_key
 from bau.checkout import Repos
 from bau.config import Config, Models, ProjectConfig
 from bau.feedback import (
@@ -15,21 +15,22 @@ from bau.feedback import (
     ack_gh_marker,
     ack_marker,
     pending_gh_items,
-    pending_plane_comments,
+    pending_purr_comments,
     pending_threads,
 )
 from bau.github import PR, GitHubApp, GitHubClient, Token
 from bau.outcome import diff_too_big
-from bau.plane import Comment, Item, PlaneClient, split_ref
 from bau.policy import Policy
 from bau.probe import probe_usage
 from bau.prompts import build_brief
+from bau.purr import Comment, Item, PurrClient, split_ref
 from bau.session import SessionResult, SessionRunner
 from bau.telemetry import RateLimit
 
 PICKED = re.compile(r"\[bau:picked-up from=([^\]]+)\]")
 REPO_LINE = re.compile(r"^repo:\s*([\w.-]+/[\w.-]+)\s*$", re.MULTILINE)
-REF_IN_BODY = re.compile(r"Plane:\s*([A-Z0-9]+-\d+)")
+# PRs opened before the move to Purr say "Plane: REF"; they still count.
+REF_IN_BODY = re.compile(r"(?:Purr|Plane):\s*([A-Z0-9]+-\d+)")
 REF_IN_TITLE = re.compile(r"\(([A-Z0-9]+-\d+)\)")
 CI_FIX_MARK = "[bau:ci-fix]"
 FINISHED_STATES = ("ready for test", "done", "archived", "cancelled")
@@ -37,7 +38,7 @@ TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 MERGED_WINDOW = timedelta(days=30)
 NO_CI_GRACE_S = 180
 NO_CI_COMMENT = "[bau] No CI checks ran on this repository; marked ready without them."
-# Plane is the ledger of failed attempts: these are the worker's own comments that end an attempt.
+# Purr holds the ledger of failed attempts: these are the worker's own comments that end an attempt.
 FAILED_ATTEMPT_PREFIXES = (
     "[bau] Too big for BAU",
     "[bau] Session ended with",
@@ -78,9 +79,9 @@ def model_for(item: Item, models: Models) -> str:
     return models.fable if models.fable_label in item.labels else models.default
 
 
-def previous_state(comments: list[Comment], worker_email: str) -> str | None:
+def previous_state(comments: list[Comment], worker_actor: str) -> str | None:
     for c in reversed(comments):
-        if c.author_email != worker_email:
+        if c.author != worker_actor:
             continue
         m = PICKED.search(c.text)
         if m:
@@ -104,8 +105,8 @@ class NightReport:
     triaged: int = 0
     asked: int = 0
     uninstalled: list[str] = field(default_factory=list)
-    unreadable: list[str] = field(default_factory=list)  # ATC projects BAU's Plane account cannot read
-    atc: str = "ok"  # "stale" when ATC was unreachable and its cached copy was used
+    unreadable: list[str] = field(default_factory=list)  # Purr projects BAU could not read
+    board: str = "ok"  # "stale" when Purr was unreachable and its cached copy was used
 
 
 class Night:
@@ -113,7 +114,7 @@ class Night:
         self,
         cfg: Config,
         projects: dict[str, ProjectConfig],
-        plane: PlaneClient,
+        purr: PurrClient,
         gh_app: GitHubApp,
         github_factory: Callable[[str], GitHubClient],
         repos: Repos,
@@ -126,15 +127,15 @@ class Night:
         sleep: Callable[[float], None] = time.sleep,
         paused: Callable[[], bool] | None = None,
         priority: dict[str, int] | None = None,
-        atc: str = "ok",
+        board: str = "ok",
     ):
-        self.cfg, self.projects, self.plane, self.gh_app = cfg, projects, plane, gh_app
+        self.cfg, self.projects, self.purr, self.gh_app = cfg, projects, purr, gh_app
         self.github_factory, self.repos, self.runner, self.clock = github_factory, repos, runner, clock
         self.oauth_token, self.dry_run, self.log, self.sleep = oauth_token, dry_run, log, sleep
         self.paused = paused or (lambda: False)
         self.policy = Policy(cfg.limits, cfg.schedule, clock)
-        self.report = NightReport(atc=atc)
-        # ATC's priority order (ref -> position); empty falls back to Plane priority, then age.
+        self.report = NightReport(board=board)
+        # Purr's priority order (ref -> position); empty falls back to Purr priority, then age.
         self.priority: dict[str, int] = priority or {}
         # Repos the GitHub App is installed on: every configured repo until run() has minted a token
         # for each; from then on only those that minted. Work on any other repo is skipped.
@@ -202,9 +203,9 @@ class Night:
             return
         text = f"[bau] Error while working this ticket: {reason}"
         try:
-            worker = self.cfg.identities.worker_plane_email
-            if not any(c.author_email == worker and text in c.text for c in self.plane.comments(ref)):
-                self.plane.comment(ref, text)
+            worker = self.cfg.identities.worker_actor
+            if not any(c.author == worker and text in c.text for c in self.purr.comments(ref)):
+                self.purr.comment(ref, text)
         except Exception as inner:  # noqa: BLE001 - best effort only
             self.log(f"{ref}: could not post the error comment: {inner}")
 
@@ -215,9 +216,9 @@ class Night:
         if self.dry_run:
             return
         text = f"[bau] Not picked up: {reason}"
-        pool = self.plane.comments(item.ref) if seen is None else seen
+        pool = self.purr.comments(item.ref) if seen is None else seen
         if not any(text in c.text for c in pool):
-            self.plane.comment(item.ref, text)
+            self.purr.comment(item.ref, text)
 
     def may_start(self) -> bool:
         d = self.policy.can_start_session(
@@ -299,32 +300,32 @@ class Night:
             ci_log,
             self.cfg.limits,
             owner_login=ids.github_login,
-            owner_email=ids.owner_plane_email,
+            owner_actor=ids.owner_actor,
             previous_attempt=previous_attempt,
             comments=comments,
-            worker_email=ids.worker_plane_email,
+            worker_actor=ids.worker_actor,
         )
 
     # -- passes --------------------------------------------------------------
     def preflight(self) -> bool:
-        """Read each project from Plane, then GitHub tokens until one mints: an unreachable service
+        """Read each project from Purr, then GitHub tokens until one mints: an unreachable service
         ends the night with a snapshot that says so, rather than a crash part-way through. One
         project BAU cannot read (not a member, say) is not an outage: it sits tonight out. Nor is one
         repo without an installation; the repo loop in run() skips it."""
         if not self.projects:
-            self.log("preflight: ATC lists no BAU-enabled projects; nothing to do")
+            self.log("preflight: Purr lists no BAU-enabled projects; nothing to do")
             return True
         failures: dict[str, Exception] = {}
         for ident in self.projects:
             try:
-                self.plane._project(ident)
+                self.purr.project(ident)
             except Exception as e:
                 failures[ident] = e
         if len(failures) == len(self.projects):
             return self.preflight_failed(next(iter(failures.values())))
         for ident, e in failures.items():
             self.report.unreadable.append(ident)
-            self.log(f"{ident}: unreadable in Plane, skipping it tonight: {type(e).__name__}: {e}")
+            self.log(f"{ident}: unreadable in Purr, skipping it tonight: {type(e).__name__}: {e}")
         self.projects = {i: p for i, p in self.projects.items() if i not in failures}
         last: Exception | None = None
         for repo in sorted({p.repo for p in self.projects.values() if p.repo}):
@@ -396,17 +397,15 @@ class Night:
         """Mark a settled PR ready (CI green, or no CI after the grace) unless it is over the size limit."""
         files, lines = pr.changed_files, pr.additions + pr.deletions
         if diff_too_big(files, lines, self.cfg.limits):
-            item = self.plane.get_item(ref)
-            back = (
-                previous_state(self.plane.comments(ref), self.cfg.identities.worker_plane_email) or item.state
-            )
+            item = self.purr.get_item(ref)
+            back = previous_state(self.purr.comments(ref), self.cfg.identities.worker_actor) or item.state
             self.close_too_big(item, repo, gh, pr, pr.head_ref, back, f"{files} files / {lines} lines")
             return
         self.mark_ready(gh, repo, pr, ci)
         if ci == "none":
-            self.plane.comment(ref, f"[bau] PR #{pr.number} has no CI checks; marked ready for review.")
+            self.purr.comment(ref, f"[bau] PR #{pr.number} has no CI checks; marked ready for review.")
         else:
-            self.plane.comment(ref, f"[bau] PR #{pr.number} CI is now green; marked ready for review.")
+            self.purr.comment(ref, f"[bau] PR #{pr.number} CI is now green; marked ready for review.")
 
     @staticmethod
     def mark_ready(gh: GitHubClient, repo: str, pr: PR, ci: str) -> None:
@@ -421,10 +420,10 @@ class Night:
         threads = pending_threads(
             gh.review_threads(repo, pr.number), ids.github_login, ids.worker_github_login
         )
-        plane_comments = pending_plane_comments(
-            self.plane.comments(ref) if comments is None else comments,
-            ids.owner_plane_email,
-            ids.worker_plane_email,
+        purr_comments = pending_purr_comments(
+            self.purr.comments(ref) if comments is None else comments,
+            ids.owner_actor,
+            ids.worker_actor,
         )
         gh_items = pending_gh_items(
             gh.issue_comment_rows(repo, pr.number),
@@ -432,7 +431,7 @@ class Night:
             ids.github_login,
             ids.worker_github_login,
         )
-        return threads, plane_comments, gh_items
+        return threads, purr_comments, gh_items
 
     def ready_pass(self) -> None:
         """Session-free: mark ready every draft whose CI has settled clean and that has no feedback."""
@@ -455,12 +454,12 @@ class Night:
         if status not in ("green", "none"):
             return
         try:
-            self.plane.get_item(ref)
+            self.purr.get_item(ref)
         except ValueError as e:
             self.log(f"skip PR #{pr.number}: {e}")
             return
-        threads, plane_comments, gh_items = self.pending_feedback(gh, repo, pr, ref)
-        if threads or plane_comments or gh_items or pr.mergeable_state == "dirty":
+        threads, purr_comments, gh_items = self.pending_feedback(gh, repo, pr, ref)
+        if threads or purr_comments or gh_items or pr.mergeable_state == "dirty":
             return
         if self.dry_run:
             self.report.planned.append(f"ready {ref} -> {repo} PR #{pr.number}")
@@ -469,13 +468,13 @@ class Night:
 
     def feedback_one(self, gh: GitHubClient, repo: str, pr: PR, ref: str) -> None:
         try:
-            item = self.plane.get_item(ref)
+            item = self.purr.get_item(ref)
         except ValueError as e:
             self.log(f"skip PR #{pr.number}: {e}")
             return
         limit = self.cfg.limits.ci_fix_sessions_per_pr
-        comments = self.plane.comments(ref)
-        threads, plane_comments, gh_items = self.pending_feedback(gh, repo, pr, ref, comments)
+        comments = self.purr.comments(ref)
+        threads, purr_comments, gh_items = self.pending_feedback(gh, repo, pr, ref, comments)
         status = gh.ci_status(repo, pr.head_sha)
         ci_red, fixes_so_far = False, 0
         if status == "red":
@@ -486,9 +485,7 @@ class Night:
                 giving_up = f"[bau] CI still red after {limit} fix sessions; leaving this for Martin."
                 if not any(giving_up in b for b in bodies):
                     gh.comment(repo, pr.number, giving_up)
-        fb = Feedback(
-            threads, plane_comments, gh_items, conflict=pr.mergeable_state == "dirty", ci_red=ci_red
-        )
+        fb = Feedback(threads, purr_comments, gh_items, conflict=pr.mergeable_state == "dirty", ci_red=ci_red)
         if fb.empty:  # a clean green draft was handled by ready_pass
             return
         if self.dry_run:
@@ -520,8 +517,8 @@ class Night:
         if gh_items:
             markers = " ".join(ack_gh_marker(i.key) for i in gh_items)
             gh.comment(repo, pr.number, f"[bau] Addressed in this PR. {markers}")
-        for c in plane_comments:
-            self.plane.comment(ref, f"[bau] Addressed in PR #{pr.number}. {ack_marker(c.id)}")
+        for c in purr_comments:
+            self.purr.comment(ref, f"[bau] Addressed in PR #{pr.number}. {ack_marker(c.id)}")
         if pr.draft:
             latest = gh.pr(repo, pr.number)
             ci = self.wait_for_ci(gh, repo, latest.head_sha)
@@ -551,7 +548,7 @@ class Night:
 
     def merge_one(self, pr: PR, ref: str) -> None:
         try:
-            item = self.plane.get_item(ref)
+            item = self.purr.get_item(ref)
         except ValueError as e:
             self.log(f"skip merged PR #{pr.number}: {e}")
             return
@@ -563,17 +560,17 @@ class Night:
         project = self.projects.get(split_ref(ref)[0])
         target = "Ready for test" if project and project.deploys else "Done"
         sha = f" as {pr.merge_commit_sha[:7]}" if pr.merge_commit_sha else ""
-        self.plane.set_state(ref, target)
-        self.plane.comment(ref, f"[bau] PR #{pr.number} merged at {pr.merged_at}{sha}; moved to {target}.")
+        self.purr.set_state(ref, target)
+        self.purr.comment(ref, f"[bau] PR #{pr.number} merged at {pr.merged_at}{sha}; moved to {target}.")
         self.repos.delete_checkout(pr.head_ref)
 
     def new_tickets_pass(self) -> None:
         from bau.triage import ready_for_pickup  # deferred: triage imports this module
 
-        worker = self.cfg.identities.worker_plane_email
+        worker = self.cfg.identities.worker_actor
         candidates: list[Item] = []
         for ident in self.projects:
-            candidates += self.plane.list_items(ident, "BAU")
+            candidates += self.purr.list_items(ident, "BAU")
         open_refs = {r for prs in self._open.values() for p in prs if (r := self.ref_of(p))}
         for item in sorted(candidates, key=lambda i: priority_key(i, self.priority)):
             if self.report.stop_reason != "ok":
@@ -585,7 +582,7 @@ class Night:
             if repo_for(item, self.projects) is None:  # the sweep marks these not-bau
                 continue
             try:
-                comments = self.plane.comments(item.ref)
+                comments = self.purr.comments(item.ref)
                 if not ready_for_pickup(item, comments, worker):
                     continue
                 if not self.new_ticket_one(item, comments):
@@ -599,13 +596,13 @@ class Night:
         ids = self.cfg.identities
         start = 0
         for i, c in enumerate(comments):
-            if c.author_email == ids.owner_plane_email:
+            if c.author == ids.owner_actor:
                 start = i + 1
         recent = comments[start:]
         failures = [
             c
             for c in recent
-            if c.author_email == ids.worker_plane_email
+            if c.author == ids.worker_actor
             and c.text.startswith(FAILED_ATTEMPT_PREFIXES)
             and not c.text.startswith(OLD_USAGE_LIMIT_PREFIXES)
         ]
@@ -629,7 +626,7 @@ class Night:
         if not repo:
             return True
         if repo not in known:
-            self.decline(item, f"repo override {repo} is not a BAU project in ATC")
+            self.decline(item, f"repo override {repo} is not a BAU project in Purr")
             return True
         if repo not in self.installed:
             self.log(f"{item.ref}: {repo} has no GitHub App installation; skipped tonight")
@@ -659,25 +656,25 @@ class Night:
         """Undo the pick-up of a ticket BAU has stopped trying: its original state, and nobody assigned."""
         if self.dry_run or item.state.casefold() != "in progress":
             return
-        worker = self.cfg.identities.worker_plane_email
-        self.plane.set_state(item.ref, previous_state(comments, worker) or item.state)
-        self.plane.unassign(item.ref)
+        worker = self.cfg.identities.worker_actor
+        self.purr.set_state(item.ref, previous_state(comments, worker) or item.state)
+        self.purr.unassign(item.ref)
 
     def close_too_big(
         self, item: Item, repo: str, gh: GitHubClient, opened: PR, branch: str, back: str, detail: str
     ) -> None:
         gh.comment(repo, opened.number, f"[bau] Closing: {detail} exceeds the BAU size limit.")
         gh.close_pr(repo, opened.number)
-        self.plane.set_state(item.ref, back)
+        self.purr.set_state(item.ref, back)
         self.mark_not_bau(item.ref, f"[bau] Too big for BAU ({detail}). Returned to {back}. Marked not-bau.")
         self.repos.delete_checkout(branch)
 
     def mark_not_bau(self, ref: str, text: str) -> None:
         """not-bau first, then the comment, then BAU off: a failure part-way leaves the item held by
         not-bau, never unlabelled where the sweep could pick it up again."""
-        self.plane.add_labels(ref, ["not-bau"])
-        self.plane.comment(ref, text)
-        self.plane.remove_labels(ref, ["BAU"])
+        self.purr.add_labels(ref, ["not-bau"])
+        self.purr.comment(ref, text)
+        self.purr.remove_labels(ref, ["BAU"])
 
     def reject_if_too_big(
         self, item: Item, repo: str, gh: GitHubClient, opened: PR, branch: str, back: str
@@ -700,30 +697,28 @@ class Night:
         branch = branch_name(item.ref, item.name)
         back = item.state
         if back.casefold() == "in progress":  # picked up on an earlier night: restore the original state
-            back = (
-                previous_state(self.plane.comments(item.ref), self.cfg.identities.worker_plane_email) or back
-            )
-        self.plane.set_state(item.ref, "In progress")
-        self.plane.assign(item.ref, self.cfg.identities.worker_plane_email)
+            back = previous_state(self.purr.comments(item.ref), self.cfg.identities.worker_actor) or back
+        self.purr.set_state(item.ref, "In progress")
+        self.purr.assign(item.ref, self.cfg.identities.worker_actor)
         if not self.already_picked_up(item.ref, branch, back):
-            self.plane.comment(
+            self.purr.comment(
                 item.ref, f"[bau:picked-up from={back}] Working on branch `{branch}` in {repo}."
             )
         try:
             self.work_picked_up(item, repo, gh, model, branch, back, previous, comments)
         except Exception:
             try:  # leave the ticket where it was so the next night retries it cleanly
-                self.plane.set_state(item.ref, back)
+                self.purr.set_state(item.ref, back)
             except Exception as inner:  # noqa: BLE001 - best effort only
                 self.log(f"{item.ref}: could not restore state {back}: {inner}")
             raise
 
     def already_picked_up(self, ref: str, branch: str, back: str) -> bool:
-        worker = self.cfg.identities.worker_plane_email
+        worker = self.cfg.identities.worker_actor
         mine = [
             c
-            for c in self.plane.comments(ref)
-            if c.author_email == worker and "[bau] Error while working this ticket" not in c.text
+            for c in self.purr.comments(ref)
+            if c.author == worker and "[bau] Error while working this ticket" not in c.text
         ]
         return (
             bool(mine) and f"[bau:picked-up from={back}]" in mine[-1].text and f"`{branch}`" in mine[-1].text
@@ -751,7 +746,7 @@ class Night:
             model=model,
         )
         if result.outcome == "too_big":
-            self.plane.set_state(item.ref, back)
+            self.purr.set_state(item.ref, back)
             self.mark_not_bau(
                 item.ref,
                 f"[bau] Too big for BAU: {_clean(result.reason)}. Returned to {back}. Marked not-bau.",
@@ -759,24 +754,22 @@ class Night:
             self.repos.delete_checkout(branch)
             return
         if result.outcome in USAGE_LIMIT_OUTCOMES:
-            self.plane.comment(item.ref, f"{USAGE_LIMIT_PREFIX} ({result.outcome}): {_clean(result.reason)}")
+            self.purr.comment(item.ref, f"{USAGE_LIMIT_PREFIX} ({result.outcome}): {_clean(result.reason)}")
             return
         if result.outcome != "done":
-            self.plane.comment(
-                item.ref, f"[bau] Session ended with {result.outcome}: {_clean(result.reason)}"
-            )
+            self.purr.comment(item.ref, f"[bau] Session ended with {result.outcome}: {_clean(result.reason)}")
             return
         opened = next(
             (p for p in gh.open_prs(repo, self.cfg.identities.worker_github_login) if p.head_ref == branch),
             None,
         )
         if not opened:
-            self.plane.comment(item.ref, "[bau] Session finished but no PR was opened; see the log.")
+            self.purr.comment(item.ref, "[bau] Session finished but no PR was opened; see the log.")
             return
         if self.reject_if_too_big(item, repo, gh, opened, branch, back):
             return
         self.report.prs_opened += 1
-        self.plane.link(item.ref, opened.url, f"PR #{opened.number}")
+        self.purr.link(item.ref, opened.url, f"PR #{opened.number}")
         ci = self.wait_for_ci(gh, repo, opened.head_sha)
         if ci == "red" and self.may_start():
             ci, opened = self.fix_red_ci(item, repo, gh, model, opened, branch, back, comments)
@@ -784,15 +777,15 @@ class Night:
                 return
         if ci == "green":
             self.mark_ready(gh, repo, opened, ci)
-            self.plane.comment(item.ref, f"[bau] PR #{opened.number} opened and CI is green: {opened.url}")
+            self.purr.comment(item.ref, f"[bau] PR #{opened.number} opened and CI is green: {opened.url}")
         elif ci == "none":
             self.mark_ready(gh, repo, opened, ci)
-            self.plane.comment(
+            self.purr.comment(
                 item.ref,
                 f"[bau] PR #{opened.number} opened; no CI checks ran, so it is marked ready: {opened.url}",
             )
         else:
-            self.plane.comment(item.ref, f"[bau] PR #{opened.number} left as draft; CI is {ci}: {opened.url}")
+            self.purr.comment(item.ref, f"[bau] PR #{opened.number} left as draft; CI is {ci}: {opened.url}")
 
     def fix_red_ci(
         self,
@@ -829,7 +822,7 @@ class Night:
                 opened.number,
                 f"[bau] CI-fix session ended with {result.outcome}: {_clean(result.reason)}",
             )
-            self.plane.comment(
+            self.purr.comment(
                 item.ref,
                 f"[bau] PR #{opened.number} left as draft; the CI-fix session ended with {result.outcome}.",
             )

@@ -1,5 +1,5 @@
 # Policy lives here, not in code: limits, schedule, models and identities.
-# Secrets are never in this file; they come from the macOS keychain, service `bau`.
+# Secrets are never in this file; they come from the macOS keychain (services `bau` and `purr`).
 # To pause the worker, `touch` the file named by paths.pause_file; its contents are the reason.
 # Host-specific values go in host.yaml under the config directory (see config/host.example.yaml).
 
@@ -42,8 +42,8 @@ models:
 
 identities:
   github_login: nakomis
-  owner_plane_email: martin@nakomis.com
-  worker_plane_email: bau@nakomis.com
+  owner_actor: martin
+  worker_actor: bau
   worker_github_login: "nakomis-bau[bot]"
 
 github_app:
@@ -53,14 +53,14 @@ github_app:
     service: bau
     account: github-app-key
 
-plane:
-  url: https://plane.home.nakomis.com
-  workspace: nakomis
+# Purr (nakomis/purr) is the tracker: BAU's work, its comments, and the list and order of projects
+# (the projects with `metadata.bauEnabled`). The API key maps to the actor `bau`; load it from SSM
+# `/purr/prod/api-keys/bau` into the keychain (see the README).
+purr:
+  url: https://purr.nakomis.com
   api_key:
-    service: bau
-    account: plane-api-key
-  client_cert: ${BAU_HOME}/config/cere.crt.pem
-  client_key: ${BAU_HOME}/config/cere.key.pem
+    service: purr
+    account: bau-api-key
 
 claude:
   oauth_token:
@@ -73,14 +73,9 @@ paths:
   logs: ~/Library/Logs/BAU
   snapshot: ${BAU_HOME}/state/state.json
   pause_file: ${BAU_HOME}/state/paused
-  # Last good copy of ATC's project list and priority, used when ATC is unreachable.
-  atc_cache: ${BAU_HOME}/state/atc-cache.json
+  # Last good copy of Purr's project list and priority, used when Purr is unreachable.
+  board_cache: ${BAU_HOME}/state/board-cache.json
   lock: ${BAU_HOME}/state/run.lock
-
-# ATC (nakomis/atc) supplies the BAU-enabled projects and the order work is done in.
-# Reached through Leia's mTLS with the Plane client certificate above.
-atc:
-  url: https://atc.plane.home.nakomis.com
 
 # container.image is derived from the build stamp unless host.yaml sets it.
 container:

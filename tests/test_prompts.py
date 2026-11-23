@@ -1,8 +1,8 @@
 from bau.config import Limits
 from bau.feedback import Feedback
 from bau.github import Thread, ThreadComment
-from bau.plane import Comment, Item
 from bau.prompts import HOUSE_PROMPT, build_brief
+from bau.purr import Comment, Item
 
 LIMITS = Limits(0.10, 0.80, 60, 5.0, 2, 3, 15, 400, 15, 1.25, 10, 4, 7, 40, 2)
 NONCE = "abcd1234"
@@ -36,7 +36,7 @@ def test_brief_wraps_ticket_text_as_data_and_names_the_branch():
 def test_brief_includes_feedback_and_ci_log():
     fb = Feedback(
         threads=[Thread("T1", False, [ThreadComment("nakomis", "rename this", "2026-10-16T00:00:00Z")])],
-        plane_comments=[Comment("c7", "martin@nakomis.com", "2026-10-16T00:00:00Z", "change approach")],
+        purr_comments=[Comment("c7", "martin", "2026-10-16T00:00:00Z", "change approach")],
         conflict=True,
         ci_red=True,
     )
@@ -44,7 +44,7 @@ def test_brief_includes_feedback_and_ci_log():
         ITEM, "nakomis/home-infra", "home-42-rotate-logs", fb, "error: boom", LIMITS, nonce=NONCE
     )
     assert "<<<REVIEW THREAD T1" in brief and "rename this" in brief
-    assert "<<<PLANE COMMENT c7" in brief and "change approach" in brief
+    assert "<<<PURR COMMENT c7" in brief and "change approach" in brief
     assert "[owner] nakomis (2026-10-16T00:00:00Z): rename this" in brief
     assert "[owner] change approach" in brief
     assert "Ack marker" not in brief and "[bau:ack" not in brief
@@ -108,12 +108,12 @@ def test_brief_carries_the_questions_history_with_martins_answers_as_owner_text(
 
     qs = [Question("q1", "Daily or weekly?", "Weekly", "less churn")]
     comments = [
-        Comment("c1", "bau@nakomis.com", "t1", questions_comment(1, "One gap.", qs)),
-        Comment("c2", "bau@nakomis.com", "t2", answers_comment(1, qs, [Answer("q1", False, "Daily, 3am")])),
+        Comment("c1", "bau", "t1", questions_comment(1, "One gap.", qs)),
+        Comment("c2", "bau", "t2", answers_comment(1, qs, [Answer("q1", False, "Daily, 3am")])),
     ]
     for fb in (None, Feedback(ci_red=True)):
         brief = build_brief(
-            ITEM, "r/x", "b", fb, None, LIMITS, nonce=NONCE, comments=comments, worker_email="bau@nakomis.com"
+            ITEM, "r/x", "b", fb, None, LIMITS, nonce=NONCE, comments=comments, worker_actor="bau"
         )
         assert "<<<QUESTIONS ROUND 1 nonce=abcd1234" in brief
         assert "[owner] Daily, 3am (Martin's own words)" in brief

@@ -19,13 +19,13 @@ from bau.abandon import (
     UnknownProject,
     abandon,
 )
-from bau.atc import AtcClient, AtcState, AtcUnavailable, load_atc_state
+from bau.board import BoardClient, BoardState, BoardUnavailable, load_board_state
 from bau.checkout import Repos
 from bau.config import Config, KeychainRef, bau_home, load_config, paused_reader
 from bau.github import GitHubApp, GitHubClient
 from bau.lock import run_lock
 from bau.markers import latest_asked
-from bau.plane import PlaneClient
+from bau.purr import PurrClient
 from bau.runloop import TOKEN_REFRESH_MARGIN, Night, NightReport, repo_for
 from bau.secrets import read_secret
 from bau.session import SessionRunner
@@ -93,28 +93,22 @@ class ClientFactory:
         return client
 
 
-ATC_STOP = "preflight: atc"
+BOARD_STOP = "preflight: purr"
 
 
 def wire(cfg: Config, config_dir: Path):
-    """Build the clients. Projects and priority come from ATC (or its cache on Cere); raises
-    AtcUnavailable when neither can be read, before any other service is touched."""
-    atc_state = load_atc_state(
-        AtcClient(cfg.atc.url, cfg.plane.client_cert, cfg.plane.client_key), cfg.paths.atc_cache
+    """Build the clients. Projects and priority come from Purr (or its cache on Cere); raises
+    BoardUnavailable when neither can be read, before any other service is touched."""
+    board_state = load_board_state(
+        BoardClient(cfg.purr.url, read_secret(cfg.purr.api_key)), cfg.paths.board_cache
     )
-    return wire_services(cfg, atc_state)
+    return wire_services(cfg, board_state)
 
 
-def wire_services(cfg: Config, atc_state: AtcState):
-    """The clients around an ATC state already in hand (wire()'s second half)."""
-    projects = atc_state.projects
-    plane = PlaneClient(
-        cfg.plane.url,
-        cfg.plane.workspace,
-        read_secret(cfg.plane.api_key),
-        cfg.plane.client_cert,
-        cfg.plane.client_key,
-    )
+def wire_services(cfg: Config, board_state: BoardState):
+    """The clients around a Purr state already in hand (wire()'s second half)."""
+    projects = board_state.projects
+    purr = PurrClient(cfg.purr.url, read_secret(cfg.purr.api_key))
     app = GitHubApp(
         cfg.github_app.app_id, read_secret(cfg.github_app.private_key), cfg.github_app.installation_id
     )
@@ -125,7 +119,7 @@ def wire_services(cfg: Config, atc_state: AtcState):
 
     factory = ClientFactory(app, clock)
     repos = Repos(cfg.paths.repos, cfg.paths.work)
-    return projects, plane, app, factory, repos, clock, atc_state
+    return projects, purr, app, factory, repos, clock, board_state
 
 
 def _kept_questions(previous: list[dict], ident: str) -> list[QuestionRow]:
@@ -143,7 +137,7 @@ def _kept_questions(previous: list[dict], ident: str) -> list[QuestionRow]:
 def snapshot_rows(
     cfg: Config,
     projects,
-    plane,
+    purr,
     factory,
     clock,
     log: Callable[..., None] = print,
@@ -155,7 +149,7 @@ def snapshot_rows(
     now = clock()
     for ident, project in projects.items():
         try:
-            question_rows.extend(_question_rows(cfg, ident, projects, plane, now, log))
+            question_rows.extend(_question_rows(cfg, ident, projects, purr, now, log))
         except Exception as e:
             log(f"snapshot: keeping the previous questions for {ident}: {e}")
             question_rows.extend(_kept_questions(previous_questions or [], ident))
@@ -182,12 +176,12 @@ def snapshot_rows(
                         gh.ci_status(project.repo, pr.head_sha),
                         pr.draft,
                         unresolved,
-                        plane.project_url(ref),
+                        purr.item_url(ref),
                     )
                 )
             deploys = []
             if project.deploys:
-                for item in plane.list_items(ident, "BAU"):
+                for item in purr.list_items(ident, "BAU"):
                     if item.state == "Ready for test":
                         deploys.append(
                             DeployRow(project.repo, item.ref, item.name, "", "", project.deploy_action)
@@ -200,10 +194,10 @@ def snapshot_rows(
     return open_rows, deploy_rows, question_rows
 
 
-def _question_rows(cfg: Config, ident: str, projects, plane, now: datetime, log) -> list[QuestionRow]:
+def _question_rows(cfg: Config, ident: str, projects, purr, now: datetime, log) -> list[QuestionRow]:
     rows = []
-    for item in plane.list_items(ident, "bau-questions"):
-        asked = latest_asked(plane.comments(item.ref), cfg.identities.worker_plane_email)
+    for item in purr.list_items(ident, "bau-questions"):
+        asked = latest_asked(purr.comments(item.ref), cfg.identities.worker_actor)
         if asked is None:
             log(f"snapshot: {item.ref} is labelled bau-questions but has no parsable questions")
             continue
@@ -214,7 +208,7 @@ def _question_rows(cfg: Config, ident: str, projects, plane, now: datetime, log)
                 repo,
                 item.ref,
                 item.name,
-                plane.project_url(item.ref),
+                purr.item_url(item.ref),
                 f"https://github.com/{repo}" if repo else "",
                 asked.at,
                 (now - at).days,
@@ -251,11 +245,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _night(args: argparse.Namespace, cfg: Config, wired, paused: Callable[[], bool]) -> Night:
-    projects, plane, app, factory, repos, clock, atc_state = wired
+    projects, purr, app, factory, repos, clock, board_state = wired
     return Night(
         cfg,
         projects,
-        plane,
+        purr,
         app,
         factory,
         repos,
@@ -264,8 +258,8 @@ def _night(args: argparse.Namespace, cfg: Config, wired, paused: Callable[[], bo
         oauth_token=read_secret(cfg.claude.oauth_token),
         dry_run=getattr(args, "dry_run", False),
         paused=paused,
-        priority=atc_state.priority,
-        atc=atc_label(atc_state),
+        priority=board_state.priority,
+        board=board_label(board_state),
     )
 
 
@@ -279,8 +273,8 @@ def _write_run_snapshot(
     *,
     failed: bool,
 ) -> None:
-    projects, plane, _, factory, _, clock, atc_state = wired
-    fetched_at, age = _stale_age(atc_state, clock())
+    projects, purr, _, factory, _, clock, board_state = wired
+    fetched_at, age = _stale_age(board_state, clock())
     last = LastRun(
         started.isoformat(),
         clock().isoformat(),
@@ -294,7 +288,7 @@ def _write_run_snapshot(
         report.labelled_not_bau,
         report.triaged,
         report.asked,
-        report.atc,
+        report.board,
         fetched_at,
         age,
     )
@@ -302,7 +296,7 @@ def _write_run_snapshot(
     open_rows, deploy_rows, question_rows = (
         ([], [], [])
         if failed
-        else snapshot_rows(cfg, projects, plane, factory, clock, previous_questions=previous.get("questions"))
+        else snapshot_rows(cfg, projects, purr, factory, clock, previous_questions=previous.get("questions"))
     )
     data = build_snapshot(
         paused=paused,
@@ -326,11 +320,11 @@ def _write_run_snapshot(
     write_snapshot(cfg.paths.snapshot, data)
 
 
-def atc_label(state: AtcState) -> str:
+def board_label(state: BoardState) -> str:
     return "stale" if state.stale else "empty" if state.empty else "ok"
 
 
-def _stale_age(state: AtcState, now: datetime) -> tuple[str, float | None]:
+def _stale_age(state: BoardState, now: datetime) -> tuple[str, float | None]:
     """When the night ran on the cache: when it was fetched and its age in hours (one decimal)."""
     if not state.stale or not state.fetched_at:
         return "", None
@@ -342,22 +336,22 @@ def _stale_age(state: AtcState, now: datetime) -> tuple[str, float | None]:
 
 
 def _unwired(cfg: Config):
-    """Stands in for wire() when ATC and its cache are both unreadable: a clock and nothing else,
+    """Stands in for wire() when Purr and its cache are both unreadable: a clock and nothing else,
     enough for a failure snapshot that touches no service."""
     tz = ZoneInfo(cfg.schedule.timezone)
-    return {}, None, None, None, None, lambda: datetime.now(tz), AtcState({}, {}, True)
+    return {}, None, None, None, None, lambda: datetime.now(tz), BoardState({}, {}, True)
 
 
 def _run(args: argparse.Namespace, cfg: Config) -> int:
     paused = paused_reader(cfg.paths.pause_file)
     try:
         wired = wire(cfg, args.config)
-    except AtcUnavailable as e:
-        print(f"bau run: {ATC_STOP}: {e} (and no cached copy)")
+    except BoardUnavailable as e:
+        print(f"bau run: {BOARD_STOP}: {e} (and no cached copy)")
         if not args.dry_run:
             unwired = _unwired(cfg)
-            _write_run_snapshot(cfg, unwired, unwired[5](), NightReport(), ATC_STOP, paused(), failed=True)
-        return exit_code(ATC_STOP)
+            _write_run_snapshot(cfg, unwired, unwired[5](), NightReport(), BOARD_STOP, paused(), failed=True)
+        return exit_code(BOARD_STOP)
     clock = wired[5]
     night = _night(args, cfg, wired, paused)
     started = clock()
@@ -388,7 +382,7 @@ def _locked_out(cfg: Config, args: argparse.Namespace) -> int:
         return 0
     try:
         wired = wire(cfg, args.config)
-    except AtcUnavailable:
+    except BoardUnavailable:
         wired = _unwired(cfg)
     clock = wired[5]
     paused = paused_reader(cfg.paths.pause_file)
@@ -415,18 +409,20 @@ def _dispatch(args: argparse.Namespace) -> int:
             return _run(args, cfg)
     try:
         wired = wire(cfg, args.config)
-    except AtcUnavailable as e:
+    except BoardUnavailable as e:
         if args.command != "serve":
-            print(f"bau {args.command}: {ATC_STOP}: {e} (and no cached copy); nothing done", file=sys.stderr)
-            return exit_code(ATC_STOP)
+            print(
+                f"bau {args.command}: {BOARD_STOP}: {e} (and no cached copy); nothing done", file=sys.stderr
+            )
+            return exit_code(BOARD_STOP)
         # The dashboard still serves the snapshot; writes that need a project refuse until a
-        # restart after ATC (or its cache) is back. launchd's KeepAlive would otherwise respawn it.
+        # restart after Purr (or its cache) is back. launchd's KeepAlive would otherwise respawn it.
         print(
-            f"bau serve: {ATC_STOP}: {e} (and no cached copy); serving with no projects",
+            f"bau serve: {BOARD_STOP}: {e} (and no cached copy); serving with no projects",
             file=sys.stderr,
         )
-        wired = wire_services(cfg, AtcState({}, {}, True))
-    projects, plane, app, factory, repos, clock, _ = wired
+        wired = wire_services(cfg, BoardState({}, {}, True))
+    projects, purr, app, factory, repos, clock, _ = wired
     if args.command == "probe":
         paused = paused_reader(cfg.paths.pause_file)
         print(_night(args, cfg, wired, paused).probe())
@@ -434,7 +430,7 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "snapshot":
         previous = read_snapshot(cfg.paths.snapshot) or {}
         open_rows, deploy_rows, question_rows = snapshot_rows(
-            cfg, projects, plane, factory, clock, previous_questions=previous.get("questions")
+            cfg, projects, purr, factory, clock, previous_questions=previous.get("questions")
         )
         last = _last_run(previous.get("last_run"))
         write_snapshot(
@@ -459,7 +455,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         from bau.api import create_app, serve, static_dir
 
         token = read_secret(KeychainRef("bau", "proxy-token"))
-        serve(create_app(cfg, projects, plane, factory, repos, static_dir(), token), args.port)
+        serve(create_app(cfg, projects, purr, factory, repos, static_dir(), token), args.port)
         return 0
     if args.command == "abandon":
         return _abandon(args, cfg, wired)
@@ -467,16 +463,16 @@ def _dispatch(args: argparse.Namespace) -> int:
 
 
 def _abandon(args: argparse.Namespace, cfg: Config, wired) -> int:
-    projects, plane, _, factory, repos, _, _ = wired
+    projects, purr, _, factory, repos, _, _ = wired
     try:
         r = abandon(
             args.ref,
-            plane=plane,
+            purr=purr,
             github_factory=factory,
             repos=repos,
             projects=projects,
             worker_login=cfg.identities.worker_github_login,
-            worker_email=cfg.identities.worker_plane_email,
+            worker_actor=cfg.identities.worker_actor,
             note=args.note,
             lock_path=cfg.paths.lock,
         )
